@@ -1,6 +1,8 @@
 package pgbulk_test
 
 import (
+	"database/sql"
+	"fmt"
 	"regexp"
 	"testing"
 
@@ -9,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestBulkInsertReturningID(t *testing.T) {
+func TestMockBulkInsertReturningID(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 	defer db.Close()
@@ -41,4 +43,44 @@ func TestBulkInsertReturningID(t *testing.T) {
 	assert.Equal(t, []int{101, 102, 103}, ids)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func ExampleBulkInsertReturningID() {
+	db, err := sql.Open("postgres", "user=postgres password=secret dbname=postgres sslmode=disable")
+	if err != nil {
+		fmt.Println("Failed to connect to database:", err)
+		return
+	}
+	defer db.Close()
+
+	// 创建测试表
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name TEXT,
+        age INT
+    )`)
+	if err != nil {
+		fmt.Println("Failed to create table:", err)
+		return
+	}
+
+	// 准备批量插入的数据
+	data := [][]interface{}{
+		{"Alice", 25},
+		{"Bob", 30},
+		{"Charlie", 35},
+	}
+
+	// 插入并获取 ID
+	ids, err := pgbulk.BulkInsertReturningID(db, "INSERT INTO users (name, age)", data)
+	if err != nil {
+		fmt.Println("Bulk insert failed:", err)
+		return
+	}
+
+	// 打印插入的 ID
+	fmt.Println("Inserted IDs:", ids)
+
+	// Output:
+	// Inserted IDs: [1 2 3]
 }

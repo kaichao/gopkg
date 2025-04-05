@@ -1,20 +1,22 @@
 # gopkg
 
+[中文](README.zh.md) | English
 
-`gopkg` is a Go library that provides utility packages for various tasks. Below is a list of the available sub-packages:
+`gopkg` is a Go utility library powering [scalebox](https://github.com/kaichao/scalebox). Key sub-packages:
 
-## Available Packages
+## Modules
 
 ### 1. `asyncbatch`
-A package for asynchronous batch processing, where data is processed in batches either when a batch size is reached or a timeout occurs.
+Asynchronous batch processor triggered by size threshold or timeout.
 
-### 2. `dbcache`
+### 2. `pgbulk`
+PostgreSQL bulk operations (insert/update with ID returning) with performance optimizations.
 
-
-### 3. `pgbulk`
-
+### 3. `dbcache`
+Database caching layer via [go-cache](https://github.com/patrickmn/go-cache), supporting SQL template-based loading.
 
 ### 4. `exec`
+Cross-environment command executor (local/SSH) with stdout/stderr capture.
 
 
 ## Installation

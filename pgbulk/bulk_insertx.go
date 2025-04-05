@@ -4,27 +4,39 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-
-	"github.com/sirupsen/logrus"
 )
 
 // BulkInsertReturningID performs batch inserts and returns generated IDs (e.g., from a SERIAL or IDENTITY column).
-// BulkInsertReturningID performs batch insert and returns generated IDs.
-func BulkInsertReturningID(db *sql.DB, sqlTemplate string, data [][]interface{}) ([]int, error) {
+func BulkInsertReturningID(db *sql.DB, sqlTemplate string, data [][]interface{}, returningColumn ...string) ([]int, error) {
 	if len(data) == 0 {
-		logrus.Warn("No data provided for batch insert.")
 		return nil, nil
 	}
 
 	paramsPerRow := len(data[0])
 	if paramsPerRow == 0 {
-		logrus.Warn("Empty rows provided for batch insert.")
 		return nil, nil
 	}
-	maxBatchSize := 65535 / paramsPerRow
-	logrus.Infof("Calculated max batch size: %d rows per batch", maxBatchSize)
+
+	const maxParamLimit = 65535
+	maxBatchSize := maxParamLimit / paramsPerRow
+	if maxBatchSize == 0 {
+		maxBatchSize = 1
+	}
+
+	// 默认返回列为 "id"，如果指定则使用用户提供的列
+	retCol := "id"
+	if len(returningColumn) > 0 && returningColumn[0] != "" {
+		retCol = returningColumn[0]
+	}
 
 	var insertedIDs []int
+
+	// 修改 3: 添加事务支持，确保原子性
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback() // 如果未提交，则回滚
 
 	for start := 0; start < len(data); start += maxBatchSize {
 		end := start + maxBatchSize
@@ -46,34 +58,39 @@ func BulkInsertReturningID(db *sql.DB, sqlTemplate string, data [][]interface{})
 			args = append(args, row...)
 		}
 
-		query := fmt.Sprintf(sqlTemplate, strings.Join(placeholders, ",")) + " RETURNING id"
-		logrus.Infof("Executing SQL: %s", query)
+		// 构造查询，包含 RETURNING 子句
+		query := fmt.Sprintf("%s VALUES %s RETURNING %s", sqlTemplate, strings.Join(placeholders, ","), retCol)
 
-		rows, err := db.Query(query, args...)
+		rows, err := tx.Query(query, args...)
 		if err != nil {
-			logrus.Errorf("Batch insert returning ID error: %v", err)
-			return nil, err
+			return nil, fmt.Errorf("batch insert returning ID error: %v", err)
 		}
 		defer rows.Close()
 
-		batchInsertedIDs := []int{}
+		batchInsertedIDs := make([]int, 0, len(batch))
 		for rows.Next() {
 			var id int
 			if err := rows.Scan(&id); err != nil {
-				logrus.Errorf("Scan error: %v", err)
-				return nil, err
+				return nil, fmt.Errorf("scan error: %v", err)
 			}
 			batchInsertedIDs = append(batchInsertedIDs, id)
 		}
 		if err := rows.Err(); err != nil {
-			logrus.Errorf("Rows error: %v", err)
-			return nil, err
+			return nil, fmt.Errorf("rows error: %v", err)
+		}
+
+		// 修改 4: 验证返回的 ID 数量与批次大小匹配
+		if len(batchInsertedIDs) != len(batch) {
+			return nil, fmt.Errorf("expected %d IDs, got %d", len(batch), len(batchInsertedIDs))
 		}
 
 		insertedIDs = append(insertedIDs, batchInsertedIDs...)
-		logrus.Infof("Batch insert completed for %d rows. Inserted IDs: %v", len(batchInsertedIDs), batchInsertedIDs)
 	}
 
-	logrus.Infof("Total inserted: %d rows.", len(insertedIDs))
+	// 提交事务
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %v", err)
+	}
+
 	return insertedIDs, nil
 }

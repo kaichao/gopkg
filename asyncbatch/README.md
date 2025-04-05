@@ -1,48 +1,50 @@
 # AsyncBatch
 
-AsyncBatch is a Go package that provides a generic asynchronous batch processing queue. It is designed for scenarios requiring efficient handling of large volumes of data, reducing processing overhead through batch execution.
+[中文](README.zh.md) | English
+
+Generic asynchronous batch processor for Go, designed for efficient handling of large volumes of data through batch execution to reduce processing overhead. Supports configurable flushing strategies.
 
 ## Features
-- Accepts data asynchronously and processes it in batches.
-- Invokes a user-defined function when a batch reaches a specified size or a timeout occurs.
-- Thread-safe data submission and processing.
-- Graceful shutdown mechanism to ensure all data is processed before exit.
+
+- **Automatic Batching**: Processes items when batch size or interval threshold is reached
+- **Thread-Safe**: Concurrent submission and processing
+- **Graceful Shutdown**: Ensures all pending items are processed
+- **Generic Support**: Works with any data type via Go generics
 
 ## Use Cases
-- Log collection and bulk database insertion.
-- Batch API request optimization to reduce call frequency.
-- Asynchronous message processing, such as queue consumption.
+
+- Bulk database operations (inserts/updates)
+- Batch API request aggregation
+- Log/event processing pipelines
+- Queue consumer implementations
 
 ## Installation
 ```sh
  go get github.com/kaichao/gopkg/asyncbatch
 ```
 
-## Usage Example
-```go
-package main
+## Quick Start
 
-import (
-	"fmt"
-	"time"
-	"github.com/kaichao/gopkg/asyncbatch"
+```go
+processor := asyncbatch.New[string](
+    5,              // Batch size 
+    10,             // Queue size
+    2*time.Second, // Flush interval
+    func(batch []string) {
+        fmt.Println("Processing:", batch)
+    },
 )
 
-func main() {
-	processor := asyncbatch.New(5, 10, 2*time.Second, func(batch []string) {
-		fmt.Println("Processing batch:", batch)
-	})
-
-	for i := 1; i <= 20; i++ {
-		processor.Submit(fmt.Sprintf("Record-%d", i))
-	}
-
-	time.Sleep(5 * time.Second)
-	processor.Stop()
+// Submit items
+for i := 0; i < 20; i++ {
+    processor.Submit(fmt.Sprintf("item-%d", i))
 }
+
+// Shutdown cleanly
+processor.Stop()
 ```
 
-## API
+## API Reference
 
 ### `New`
 Creates a new asynchronous batch processing queue.

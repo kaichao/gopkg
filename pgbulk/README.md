@@ -1,21 +1,37 @@
 # pgbulk
 
-`pgbulk` is a lightweight Go package for efficient bulk operations in PostgreSQL, including `INSERT`, `UPDATE`, and `INSERT ... RETURNING` patterns.
+[中文](README.zh.md) | English
+
+Lightweight Go package for high-performance PostgreSQL bulk operations.
 
 ## Features
 
-- Efficiently performs batch inserts, respecting PostgreSQL's parameter limits.
-- Automatically chunks large datasets into manageable batches.
-- Supports reusable SQL templates with dynamic placeholder generation.
+- **Batch Processing**: Automatically chunks large datasets into optimal batches
+- **SQL Templates**: Reusable templates with dynamic placeholders
+- **Full CRUD Support**: `INSERT`, `UPDATE`, and `INSERT...RETURNING` operations
+- **PG-Compatible**: Respects PostgreSQL's parameter limits
 
 ## Use Cases
 
-- Bulk importing millions of rows into a PostgreSQL database.
-- Inserting logs, metrics, or analytical data in high-throughput systems.
-- Scenarios requiring fast `INSERT RETURNING id` operations.
+- Bulk importing millions of records from CSV/APIs
+- High-frequency metrics/logging data storage
+- ETL pipelines requiring `INSERT RETURNING id`
+- Batch updates for inventory/order systems
 
 ## Installation
 
 ```bash
 go get github.com/kaichao/gopkg/pgbulk
+```
+
+## Quick Start
+
+### 1. Start PostgreSQL:
+```sh
+docker run -e POSTGRES_PASSWORD=secret -p 5432:5432 -d postgres:17.4
+```
+
+### 2. Basic usage:
+```go
+
 ```

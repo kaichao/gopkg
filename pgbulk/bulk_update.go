@@ -4,8 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-
-	"github.com/sirupsen/logrus"
 )
 
 // BulkUpdate performs a batch update into PostgreSQL.
@@ -14,16 +12,16 @@ func BulkUpdate(db *sql.DB, sqlTemplate string, ids []int, data [][]interface{})
 		return fmt.Errorf("invalid input: ids and data must be non-empty and of the same length")
 	}
 
+	const maxParamLimit = 65535 // 硬编码为 PostgreSQL 默认限制
 	paramsPerRow := len(data[0]) + 1
-	maxBatchSize := 65535 / paramsPerRow
-	logrus.Infof("Calculated max batch size: %d rows per batch", maxBatchSize)
+	maxBatchSize := maxParamLimit / paramsPerRow
+	if maxBatchSize == 0 {
+		maxBatchSize = 1
+	}
 
 	tableName, columnNames, err := parseSQLTemplate(sqlTemplate, len(data[0]))
 	if err != nil {
 		return fmt.Errorf("failed to parse sqlTemplate: %v", err)
-	}
-	if len(columnNames) != len(data[0]) {
-		return fmt.Errorf("column count in template (%d) does not match data (%d)", len(columnNames), len(data[0]))
 	}
 
 	for start := 0; start < len(ids); start += maxBatchSize {
@@ -38,9 +36,9 @@ func BulkUpdate(db *sql.DB, sqlTemplate string, ids []int, data [][]interface{})
 
 		var queryBuilder strings.Builder
 		queryBuilder.WriteString(fmt.Sprintf("UPDATE %s SET ", tableName))
-
 		var args []interface{}
 		paramIdx := 1
+
 		for colIdx, colName := range columnNames {
 			queryBuilder.WriteString(fmt.Sprintf("%s = CASE ", colName))
 			for i := 0; i < batchSize; i++ {
@@ -49,9 +47,7 @@ func BulkUpdate(db *sql.DB, sqlTemplate string, ids []int, data [][]interface{})
 				args = append(args, batchData[i][colIdx])
 				paramIdx += 2
 			}
-			queryBuilder.WriteString("ELSE ")
-			queryBuilder.WriteString(colName)
-			queryBuilder.WriteString(" END")
+			queryBuilder.WriteString(fmt.Sprintf("ELSE %s END", colName))
 			if colIdx < len(columnNames)-1 {
 				queryBuilder.WriteString(", ")
 			}
@@ -69,18 +65,18 @@ func BulkUpdate(db *sql.DB, sqlTemplate string, ids []int, data [][]interface{})
 		queryBuilder.WriteString(")")
 
 		query := queryBuilder.String()
-		logrus.Infof("Executing SQL: %s", query)
-
 		result, err := db.Exec(query, args...)
 		if err != nil {
-			return fmt.Errorf("Batch update execution error: %v", err)
+			return fmt.Errorf("batch update execution error: %v", err)
 		}
 
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
-			return fmt.Errorf("Batch update error: %v", err)
+			return fmt.Errorf("batch update error: %v", err)
 		}
-		logrus.Infof("Batch update completed. Rows affected: %d", rowsAffected)
+		if int(rowsAffected) != batchSize {
+			return fmt.Errorf("expected %d rows affected, got %d", batchSize, rowsAffected)
+		}
 	}
 
 	return nil
