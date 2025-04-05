@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/kaichao/gopkg/pgbulk"
-
 	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
