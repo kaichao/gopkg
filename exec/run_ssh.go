@@ -36,7 +36,7 @@ func DefaultSSHKeyPath() (string, error) {
 	return keyPath, nil
 }
 
-// ExecSSHCommand executes command via SSH with full lifecycle management
+// RunSSHCommand executes command via SSH with full lifecycle management
 //
 // Steps:
 // 1. Establish SSH connection with authentication
@@ -49,7 +49,7 @@ func DefaultSSHKeyPath() (string, error) {
 // - Network interruptions during execution
 // - Malformed remote command parsing
 // - Permission denied errors
-func ExecSSHCommand(config SSHConfig, command string, timeout int) (int, string, string, error) {
+func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, string, error) {
 	// 处理密钥路径
 	var keyPath string
 	if config.KeyPath != "" {

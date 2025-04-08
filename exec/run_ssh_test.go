@@ -10,14 +10,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestExecSSH(t *testing.T) {
+func TestRunSSH(t *testing.T) {
 	config := exec.SSHConfig{
 		User: "scalebox",
 		Host: "10.255.128.1",
 		Port: 22,
 		// KeyPath 留空，使用默认 ~/.ssh/id_rsa
 	}
-	exitCode, stdout, stderr, err := exec.ExecSSHCommand(config, "sleepa 10", 5)
+	exitCode, stdout, stderr, err := exec.RunSSHCommand(config, "sleepa 10", 5)
 	if err != nil {
 		fmt.Printf("Error: %v, ExitCode: %d\n", err, exitCode)
 	} else {
@@ -25,7 +25,7 @@ func TestExecSSH(t *testing.T) {
 	}
 }
 
-func TestExecSSHCommand(t *testing.T) {
+func TestRunSSHCommand(t *testing.T) {
 	// 需要真实SSH环境的测试用例标记为需要联网
 	if os.Getenv("NETWORK_TESTS") != "1" {
 		t.Skip("Skipping network-dependent tests")
@@ -41,7 +41,7 @@ func TestExecSSHCommand(t *testing.T) {
 		config := baseConfig
 		config.KeyPath = os.ExpandEnv("$HOME/.ssh/id_rsa")
 
-		code, out, _, err := exec.ExecSSHCommand(config, "echo 'ssh success'", 5)
+		code, out, _, err := exec.RunSSHCommand(config, "echo 'ssh success'", 5)
 		assert.Equal(t, 0, code)
 		assert.Contains(t, out, "ssh success")
 		assert.Nil(t, err)
@@ -51,7 +51,7 @@ func TestExecSSHCommand(t *testing.T) {
 		config := baseConfig
 		config.Password = "your_password" // 替换为测试密码
 
-		code, out, _, err := exec.ExecSSHCommand(config, "whoami", 5)
+		code, out, _, err := exec.RunSSHCommand(config, "whoami", 5)
 		assert.Equal(t, 0, code)
 		assert.Contains(t, out, config.User)
 		assert.Nil(t, err)
@@ -61,7 +61,7 @@ func TestExecSSHCommand(t *testing.T) {
 		config := baseConfig
 		config.KeyPath = "/invalid/key/path"
 
-		code, _, _, err := exec.ExecSSHCommand(config, "echo test", 2)
+		code, _, _, err := exec.RunSSHCommand(config, "echo test", 2)
 		assert.Equal(t, 125, code)
 		assert.ErrorContains(t, err, "ssh dial failed")
 	})
@@ -71,7 +71,7 @@ func TestExecSSHCommand(t *testing.T) {
 		config.KeyPath = os.ExpandEnv("$HOME/.ssh/id_rsa")
 
 		start := time.Now()
-		code, _, _, err := exec.ExecSSHCommand(config, "sleep 10", 2)
+		code, _, _, err := exec.RunSSHCommand(config, "sleep 10", 2)
 		duration := time.Since(start)
 
 		assert.Equal(t, 124, code)
@@ -88,14 +88,14 @@ func TestExecSSHCommand(t *testing.T) {
 		testCmd := fmt.Sprintf("sleep 10; echo $! > /tmp/ssh_test_%d", uniqueID)
 
 		// 启动超时命令
-		go exec.ExecSSHCommand(config, testCmd, 1)
+		go exec.RunSSHCommand(config, testCmd, 1)
 
 		// 等待清理完成
 		time.Sleep(2 * time.Second)
 
 		// 验证PID文件是否被清理
 		checkCmd := fmt.Sprintf("test -f /tmp/ssh_test_%d && echo exists || echo missing", uniqueID)
-		code, out, _, _ := exec.ExecSSHCommand(config, checkCmd, 2)
+		code, out, _, _ := exec.RunSSHCommand(config, checkCmd, 2)
 		assert.Equal(t, 0, code)
 		assert.Contains(t, out, "missing")
 	})

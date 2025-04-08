@@ -26,7 +26,7 @@ go get github.com/kaichao/gopkg/exec
 ## Quick Start
 ### Local Execution
 ```go
-code, stdout, stderr, err := exec.ExecCommandReturnAll("ls -l", 10) // 10s timeout
+code, stdout, stderr, err := exec.RunReturnAll("ls -l", 10) // 10s timeout
 fmt.Printf("Exit: %d\nOutput:\n%s\nError:\n%s", code, stdout, stderr)
 ```
 
@@ -39,18 +39,18 @@ config := exec.SSHConfig{
     KeyPath: "/path/to/private_key",
 }
 
-code, out, errOut, err := exec.ExecSSHCommand(config, "docker ps", 30) // 30s timeout
+code, out, errOut, err := exec.RunSSHCommand(config, "docker ps", 30) // 30s timeout
 ```
 
 ## API Reference
-### ExecCommandReturnAll
+### RunReturnAll
 ```go
-func ExecCommandReturnAll(command string, timeout int) (int, string, string, error)
+func RunReturnAll(command string, timeout int) (int, string, string, error)
 ```
 
-### ExecSSHCommand
+### RunSSHCommand
 ```go
-func ExecSSHCommand(config SSHConfig, command string, timeout int) (int, string, string, error)
+func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, string, error)
 ```
 
 ### SSHConfig
