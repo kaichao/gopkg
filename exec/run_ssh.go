@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -103,92 +104,87 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 	}
 	defer client.Close()
 
-	// 创建会话
 	session, err := client.NewSession()
 	if err != nil {
 		return 125, "", "", fmt.Errorf("ssh: create session failed: %w", err)
 	}
 	defer session.Close()
 
-	// 设置命令，使用 setsid 创建进程组并记录 PID
-	wrappedCmd := fmt.Sprintf("bash -c 'setsid %s; echo $! > /tmp/ssh_cmd_pid_%d'", command, os.Getpid())
-	stdoutPipe, err := session.StdoutPipe()
-	if err != nil {
-		return 125, "", "", fmt.Errorf("capture stdout pipe failed: %v", err)
-	}
-	stderrPipe, err := session.StderrPipe()
-	if err != nil {
-		return 125, "", "", fmt.Errorf("capture stderr pipe failed: %v", err)
-	}
+	// ✅ 生成唯一标识符（便于测试 pgrep）
+	marker := fmt.Sprintf("MARKER_%d", time.Now().UnixNano())
+	cmdWithMarker := fmt.Sprintf("%s; # %s", command, marker)
+
+	// ✅ 包装命令：setsid + 记录 PID
+	// Embed the marker in an environment variable or argument that is likely to show up in process listings.
+	wrappedCmd := fmt.Sprintf("bash -c 'export MARKER=%s; setsid bash -c \"%s\" & echo $! > /tmp/ssh_cmd_pid_%d; wait'",
+		marker, strings.ReplaceAll(cmdWithMarker, "\"", "\\\""), os.Getpid())
 
 	// 捕获输出
+	stdoutPipe, _ := session.StdoutPipe()
+	stderrPipe, _ := session.StderrPipe()
 	var stdoutBuf, stderrBuf bytes.Buffer
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		_, err := io.Copy(&stdoutBuf, stdoutPipe)
-		if err != nil {
-			logrus.Errorf("copy stdout failed: %v", err)
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		_, err := io.Copy(&stderrBuf, stderrPipe)
-		if err != nil {
-			logrus.Errorf("copy stderr failed: %v", err)
-		}
-	}()
+	go func() { defer wg.Done(); _, _ = io.Copy(&stdoutBuf, stdoutPipe) }()
+	go func() { defer wg.Done(); _, _ = io.Copy(&stderrBuf, stderrPipe) }()
 
 	// 启动命令
 	if err := session.Start(wrappedCmd); err != nil {
 		return 125, "", "", fmt.Errorf("start command failed: %v", err)
 	}
 
-	// 超时清理
 	pidFile := fmt.Sprintf("/tmp/ssh_cmd_pid_%d", os.Getpid())
-	if timeout > 0 {
-		go func() {
-			<-ctx.Done()
-			if ctx.Err() == context.DeadlineExceeded {
-				session.Close()
-				cleanupRemoteProcess(clientConfig, config, pidFile)
-			}
-		}()
-	}
 
-	// 等待命令完成
-	waitErr := session.Wait()
+	// ✅ 超时清理逻辑
+	done := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = session.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-ctx.Done():
+		if ctx.Err() == context.DeadlineExceeded {
+			// ✅ 主动关闭会话连接
+			_ = session.Signal(ssh.SIGKILL)
+			_ = session.Close()
+
+			// ✅ 远程 kill
+			cleanupRemoteProcess(clientConfig, config, pidFile)
+
+			// ✅ 等待输出收集完毕
+			wg.Wait()
+			cleanupPidFile(clientConfig, config, pidFile)
+			return 124, stdoutBuf.String(), stderrBuf.String(), fmt.Errorf("command timed out")
+		}
+	case <-done:
+		// 命令执行完毕
+	}
 	wg.Wait()
 
-	// 处理退出码和错误
+	// 处理退出码
 	var exitCode int
-	var retErr error
 	if waitErr != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			exitCode = 124
-			retErr = fmt.Errorf("command timed out")
-		} else if exitErr, ok := waitErr.(*ssh.ExitError); ok {
+		if exitErr, ok := waitErr.(*ssh.ExitError); ok {
 			exitCode = exitErr.ExitStatus()
-			retErr = nil
 		} else {
 			exitCode = 125
-			retErr = waitErr
+			err = waitErr
 		}
 	} else {
 		exitCode = 0
-		retErr = nil
 	}
 
 	// 清理 PID 文件
 	cleanupPidFile(clientConfig, config, pidFile)
 
-	return exitCode, stdoutBuf.String(), stderrBuf.String(), retErr
+	return exitCode, stdoutBuf.String(), stderrBuf.String(), err
 }
 
 // cleanupRemoteProcess kills the remote process group based on PID file.
 func cleanupRemoteProcess(clientConfig *ssh.ClientConfig, config SSHConfig, pidFile string) {
-	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", config.Host, config.Port), clientConfig)
+	client, err := retryDial(config, clientConfig, 3) // 传入 clientConfig
 	if err != nil {
 		logrus.Errorf("cleanup: ssh dial failed: %v", err)
 		return
@@ -202,11 +198,28 @@ func cleanupRemoteProcess(clientConfig *ssh.ClientConfig, config SSHConfig, pidF
 	}
 	defer session.Close()
 
-	// 读取 PID 并清理进程组
-	cleanupCmd := fmt.Sprintf("if [ -f %s ]; then pid=$(cat %s); kill -TERM -$pid 2>/dev/null || kill -KILL -$pid 2>/dev/null; fi", pidFile, pidFile)
+	cleanupCmd := fmt.Sprintf(`
+        if [ -f %s ]; then
+            pgid=$(cat %s | xargs -I{} ps -o pgid= {} | grep -o '[0-9]*');
+            kill -TERM -$pgid 2>/dev/null || kill -KILL -$pgid 2>/dev/null;
+        fi`, pidFile, pidFile)
+
 	if err := session.Run(cleanupCmd); err != nil {
 		logrus.Errorf("cleanup: failed to kill process group: %v", err)
 	}
+}
+
+func retryDial(config SSHConfig, clientConfig *ssh.ClientConfig, attempts int) (*ssh.Client, error) {
+	var client *ssh.Client
+	var err error
+	for i := 0; i < attempts; i++ {
+		client, err = ssh.Dial("tcp", fmt.Sprintf("%s:%d", config.Host, config.Port), clientConfig)
+		if err == nil {
+			return client, nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return nil, err
 }
 
 // cleanupPidFile removes the temporary PID file.

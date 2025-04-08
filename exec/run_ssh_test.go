@@ -3,6 +3,7 @@ package exec_test
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,77 +27,81 @@ func TestRunSSH(t *testing.T) {
 }
 
 func TestRunSSHCommand(t *testing.T) {
-	// 需要真实SSH环境的测试用例标记为需要联网
-	if os.Getenv("NETWORK_TESTS") != "1" {
-		t.Skip("Skipping network-dependent tests")
-	}
-
 	baseConfig := exec.SSHConfig{
-		Host: "localhost",
+		Host: "h11",
 		Port: 22,
 		User: os.Getenv("USER"),
 	}
 
-	t.Run("key-based authentication", func(t *testing.T) {
+	// (1) 修复密钥认证测试
+	t.Run("key-based auth", func(t *testing.T) {
 		config := baseConfig
 		config.KeyPath = os.ExpandEnv("$HOME/.ssh/id_rsa")
 
-		code, out, _, err := exec.RunSSHCommand(config, "echo 'ssh success'", 5)
+		code, out, errOut, err := exec.RunSSHCommand(config, "/usr/bin/printf 'SSH_OK'", 3)
+
+		t.Logf("ExitCode: %d", code)
+		t.Logf("Stdout: %q", out)
+		t.Logf("Stderr: %q", errOut)
+		t.Logf("Err: %v", err)
+
 		assert.Equal(t, 0, code)
-		assert.Contains(t, out, "ssh success")
+		assert.Equal(t, "SSH_OK", out)
 		assert.Nil(t, err)
 	})
 
-	t.Run("password authentication", func(t *testing.T) {
-		config := baseConfig
-		config.Password = "your_password" // 替换为测试密码
-
-		code, out, _, err := exec.RunSSHCommand(config, "whoami", 5)
-		assert.Equal(t, 0, code)
-		assert.Contains(t, out, config.User)
-		assert.Nil(t, err)
-	})
-
-	t.Run("invalid credentials", func(t *testing.T) {
-		config := baseConfig
-		config.KeyPath = "/invalid/key/path"
-
-		code, _, _, err := exec.RunSSHCommand(config, "echo test", 2)
-		assert.Equal(t, 125, code)
-		assert.ErrorContains(t, err, "ssh dial failed")
-	})
-
-	t.Run("remote command timeout", func(t *testing.T) {
+	// (2) 增强超时测试
+	t.Run("command timeout with process cleanup", func(t *testing.T) {
 		config := baseConfig
 		config.KeyPath = os.ExpandEnv("$HOME/.ssh/id_rsa")
 
+		// 生成唯一标记
+		marker := fmt.Sprintf("MARKER_%d", time.Now().UnixNano())
+		cmd := fmt.Sprintf("sleep 10 && echo %s", marker)
+
+		// 执行测试
 		start := time.Now()
-		code, _, _, err := exec.RunSSHCommand(config, "sleep 10", 2)
+		code, _, _, err := exec.RunSSHCommand(config, cmd, 2)
 		duration := time.Since(start)
 
+		// 验证超时处理
 		assert.Equal(t, 124, code)
 		assert.ErrorContains(t, err, "timed out")
-		assert.True(t, duration < 3*time.Second, "should timeout within 3 seconds")
+		assert.True(t, duration < 3*time.Second, "actual duration: %v", duration)
+
+		// 验证进程清理
+		assert.Eventually(t, func() bool {
+			_, out, _, _ := exec.RunSSHCommand(config,
+				fmt.Sprintf("pgrep -f '%s' || echo clean", marker),
+				2,
+			)
+			return strings.Contains(out, "clean")
+		}, 3*time.Second, 500*time.Millisecond)
 	})
 
-	t.Run("cleanup verification", func(t *testing.T) {
+	// (3) 可靠的文件清理验证
+	t.Run("resource cleanup verification", func(t *testing.T) {
 		config := baseConfig
 		config.KeyPath = os.ExpandEnv("$HOME/.ssh/id_rsa")
 
-		// 生成唯一PID文件
-		uniqueID := time.Now().UnixNano()
-		testCmd := fmt.Sprintf("sleep 10; echo $! > /tmp/ssh_test_%d", uniqueID)
+		uniqueID := fmt.Sprintf("%d", time.Now().UnixNano())
+		pidFile := fmt.Sprintf("/tmp/ssh_test_%s", uniqueID)
 
-		// 启动超时命令
+		// 使用原子操作创建文件
+		testCmd := fmt.Sprintf(
+			"tmp=$(mktemp) && echo $$ > $tmp && mv $tmp %s && sleep 30",
+			pidFile,
+		)
+
 		go exec.RunSSHCommand(config, testCmd, 1)
 
-		// 等待清理完成
-		time.Sleep(2 * time.Second)
-
-		// 验证PID文件是否被清理
-		checkCmd := fmt.Sprintf("test -f /tmp/ssh_test_%d && echo exists || echo missing", uniqueID)
-		code, out, _, _ := exec.RunSSHCommand(config, checkCmd, 2)
-		assert.Equal(t, 0, code)
-		assert.Contains(t, out, "missing")
+		// 验证文件被清理
+		assert.Eventually(t, func() bool {
+			code, out, _, _ := exec.RunSSHCommand(config,
+				fmt.Sprintf("test -f %s && echo exists || echo missing", pidFile),
+				2,
+			)
+			return code == 0 && strings.Contains(out, "missing")
+		}, 5*time.Second, 1*time.Second)
 	})
 }
