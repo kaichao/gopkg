@@ -48,12 +48,19 @@ type AsyncBatch[T any] struct {
 
 // New creates a new asynchronous batch processing queue.
 func New[T any](batchSize int, queueSize int, flushInterval time.Duration, processFunc func([]T)) *AsyncBatch[T] {
+	if batchSize <= 0 {
+		batchSize = 1000
+	}
 	if queueSize <= 0 {
-		queueSize = 10 // Default to 10
+		queueSize = 10 * batchSize
+	}
+	if processFunc == nil {
+		logrus.Errorln("processFunc must not be nil")
+		return nil
 	}
 
 	ab := &AsyncBatch[T]{
-		inputChan:     make(chan T, batchSize*queueSize), // Provide some buffer
+		inputChan:     make(chan T, queueSize),
 		batchSize:     batchSize,
 		flushInterval: flushInterval,
 		done:          make(chan struct{}),
@@ -76,28 +83,60 @@ func (ab *AsyncBatch[T]) Submit(item T) {
 // run listens to the asynchronous queue and processes data in batches.
 func (ab *AsyncBatch[T]) run() {
 	defer ab.wg.Done()
+
 	var batch []T
+	timer := time.NewTimer(ab.flushInterval)
+	if ab.flushInterval <= 0 {
+		timer.Stop()
+	}
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ab.done:
-			// Process remaining data before exit
+			// 处理当前批次的数据
+			if len(batch) > 0 {
+				ab.processFunc(batch)
+				batch = nil
+			}
+			// 排空 inputChan 中的剩余数据
+		drainLoop:
+			for {
+				select {
+				case item := <-ab.inputChan:
+					batch = append(batch, item)
+					if len(batch) >= ab.batchSize {
+						ab.processFunc(batch)
+						batch = nil
+					}
+				default:
+					break drainLoop
+				}
+			}
+			// 处理最后剩余的批次
 			if len(batch) > 0 {
 				ab.processFunc(batch)
 			}
 			return
+
 		case item := <-ab.inputChan:
 			batch = append(batch, item)
-			// Continue reading until queue is empty
-			for {
-				select {
-				case nextItem := <-ab.inputChan:
-					batch = append(batch, nextItem)
-				default:
-					ab.processFunc(batch)
-					batch = nil
-					break
+			if len(batch) >= ab.batchSize {
+				ab.processFunc(batch)
+				batch = nil
+				// 重置定时器
+				if ab.flushInterval > 0 {
+					timer.Reset(ab.flushInterval)
 				}
+			}
+		case <-timer.C:
+			if len(batch) > 0 {
+				ab.processFunc(batch)
+				batch = nil
+			}
+			// 重置定时器
+			if ab.flushInterval > 0 {
+				timer.Reset(ab.flushInterval)
 			}
 		}
 	}
