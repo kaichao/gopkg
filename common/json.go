@@ -12,7 +12,9 @@ import (
 // 设置属性（值统一处理为字符串类型）
 func SetJSONAttribute(jsonString string, attrName string, attrValue string) string {
 	data := make(map[string]interface{})
-
+	if jsonString == "" {
+		jsonString = "{}"
+	}
 	// 解析原始JSON
 	if err := json.Unmarshal([]byte(jsonString), &data); err != nil {
 		logrus.Errorf("json.Unmarshal(), err-info:%v", err)

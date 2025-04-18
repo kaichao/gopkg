@@ -26,7 +26,7 @@ go get github.com/kaichao/gopkg/dbcache
 ## Quick Start
 ```go
 // Initialize cache for user emails
-emailCache := dbcache.NewDBCache[string](
+emailCache := dbcache.New[string](
     db, // *sql.DB connection
     "SELECT email FROM users WHERE id = $1",
     5*time.Minute, // Cache expiration

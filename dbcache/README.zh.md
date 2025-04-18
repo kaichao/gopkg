@@ -26,7 +26,7 @@ go get github.com/kaichao/gopkg/dbcache
 ## 快速开始
 ```go
 // Initialize cache for user emails
-emailCache := dbcache.NewDBCache[string](
+emailCache := dbcache.New[string](
     db, // *sql.DB connection
     "SELECT email FROM users WHERE id = $1",
     5*time.Minute, // Cache expiration
@@ -42,7 +42,7 @@ email, _ := emailCache.Get(123)
 
 ### New
 ```go
-func NewDBCache[T any](
+func New[T any](
     db *sql.DB,
     sqlTemplate string,
     defaultExp, cleanupInterval time.Duration,
