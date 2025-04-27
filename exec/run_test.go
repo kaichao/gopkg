@@ -1,6 +1,7 @@
 package exec_test
 
 import (
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 )
 
 func TestRunReturnAll(t *testing.T) {
+	os.Setenv("STRICT_BASH_MODE", "yes")
 	// 1. 成功执行命令
 	t.Run("successful command execution", func(t *testing.T) {
 		code, out, _, err := exec.RunReturnAll("echo 'hello world'", 2)

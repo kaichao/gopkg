@@ -46,10 +46,13 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 	// 创建命令并支持进程组终止
 	// 在 bash 中开启严格模式，并在 EXIT 时清理仅子进程、保留原退出码
 	// 注意：对 pkill 加 “|| true”，避免其失败（无子进程）中断 Trap
-	bashCmd := `
-	      set -euo pipefail
-	      trap 'rc=$?; echo "[cleanup] bash exit rc=$rc" >&2; pkill -TERM -P $$ || true; exit $rc' EXIT
-	      ` + command
+	bashCmd := command
+	if os.Getenv("STRICT_BASH_MODE") == "yes" {
+		bashCmd = `
+			set -euo pipefail
+			trap 'rc=$?; echo "[cleanup] bash exit rc=$rc" >&2; pkill -TERM -P $$ || true; exit $rc' EXIT
+		` + command
+	}
 	cmd := exec.CommandContext(ctx, "/bin/bash", "-c", bashCmd)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
