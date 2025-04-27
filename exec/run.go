@@ -44,7 +44,13 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 	}
 
 	// 创建命令并支持进程组终止
-	cmd := exec.CommandContext(ctx, "/bin/bash", "-c", command)
+	// cmd := exec.CommandContext(ctx, "/bin/bash", "-c", command)
+	// 在 bash 中启用严格模式，并在 ERR/EXIT 时触发清理（例如终止整个进程组）
+	cmd := exec.CommandContext(ctx, "/bin/bash", "-c",
+		"set -euo pipefail; "+
+			"trap 'echo \"[cleanup] bash exit code $? at line $LINENO\" >&2; "+
+			"kill -TERM -$$' ERR EXIT; "+
+			command)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	// 获取输出管道
