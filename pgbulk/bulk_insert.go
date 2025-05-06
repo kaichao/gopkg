@@ -33,7 +33,6 @@ func BulkInsert(db *sql.DB, sqlTemplate string, data [][]interface{}) error {
 			args = append(args, row...)
 		}
 
-		// query := fmt.Sprintf(sqlTemplate, strings.Join(placeholders, ","))
 		query := fmt.Sprintf("%s VALUES %s", sqlTemplate, strings.Join(placeholders, ","))
 		if _, err := db.Exec(query, args...); err != nil {
 			logrus.Errorf("Batch insert execution error: %v", err)
