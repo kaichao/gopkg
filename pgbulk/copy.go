@@ -72,7 +72,7 @@ func Copy(db *sql.DB, sqlTemplate string, data [][]interface{}) (int, error) {
 				buffer.WriteString(`"`)
 				buffer.WriteString(escaped)
 				buffer.WriteString(`"`)
-			case int, int64, float64, bool:
+			case int, int32, int64, float64, bool:
 				fmt.Fprintf(&buffer, "%v", v)
 			case time.Time:
 				// Format timestamp as YYYY-MM-DD HH:MM:SS.000000
