@@ -11,8 +11,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// TestBulkInsert tests the BulkInsert function under various scenarios
-func TestBulkInsert(t *testing.T) {
+// TestInsert tests the BulkInsert function under various scenarios
+func TestInsert(t *testing.T) {
 	// Create a new mock database
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -105,7 +105,7 @@ func TestBulkInsert(t *testing.T) {
 			expectedError: nil,
 			setupMock: func(t *testing.T) {
 				// Expect single batch with all 3 rows since maxBatchSize (65535/2 = 32767) is large
-				// Note: To test actual batching, BulkInsert would need a configurable maxBatchSize
+				// Note: To test actual batching, Insert would need a configurable maxBatchSize
 				mock.ExpectExec(`INSERT INTO table_name \(col1, col2\) VALUES \(\$1,\$2\),\(\$3,\$4\),\(\$5,\$6\)`).
 					WithArgs(1, "test1", 2, "test2", 3, "test3").
 					WillReturnResult(sqlmock.NewResult(1, 3))
@@ -116,7 +116,7 @@ func TestBulkInsert(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.setupMock(t)
-			err := pgbulk.BulkInsert(db, tt.sqlTemplate, tt.data)
+			err := pgbulk.Insert(db, tt.sqlTemplate, tt.data)
 			if tt.expectedError != nil {
 				if err == nil {
 					t.Errorf("Expected error %v, got nil", tt.expectedError)

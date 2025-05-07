@@ -8,8 +8,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// BulkInsert performs a regular batch insert into PostgreSQL.
-func BulkInsert(db *sql.DB, sqlTemplate string, data [][]interface{}) error {
+// Insert performs a regular batch insert into PostgreSQL.
+func Insert(db *sql.DB, sqlTemplate string, data [][]interface{}) error {
 	if len(data) == 0 {
 		return fmt.Errorf("data is empty")
 	}

@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// BulkUpdate performs a batch update into PostgreSQL.
-func BulkUpdate(db *sql.DB, sqlTemplate string, ids []int, data [][]interface{}) error {
+// Update performs a batch update into PostgreSQL.
+func Update(db *sql.DB, sqlTemplate string, ids []int, data [][]interface{}) error {
 	if len(ids) == 0 || len(data) == 0 || len(data) != len(ids) {
 		return fmt.Errorf("invalid input: ids and data must be non-empty and of the same length")
 	}

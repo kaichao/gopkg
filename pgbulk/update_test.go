@@ -13,7 +13,7 @@ import (
 	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
-func TestMockBulkUpdate(t *testing.T) {
+func TestMockUpdate(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 	defer db.Close()
@@ -40,13 +40,13 @@ UPDATE users SET name = CASE WHEN id = $1 THEN $2 WHEN id = $3 THEN $4 ELSE name
 		WithArgs(1, "Alice", 2, "Bob", 1, 30, 2, 25, 1, 2).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
-	err = pgbulk.BulkUpdate(db, sqlTemplate, ids, data)
+	err = pgbulk.Update(db, sqlTemplate, ids, data)
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// ExampleBulkUpdate demonstrates how to use BulkUpdate to update multiple rows in a PostgreSQL table.
-func ExampleBulkUpdate() {
+// ExampleUpdate demonstrates how to use Update to update multiple rows in a PostgreSQL table.
+func ExampleUpdate() {
 	// 假设已有一个 PostgreSQL 数据库连接
 	db, err := sql.Open("postgres", "user=postgres password=mysecretpassword dbname=test sslmode=disable")
 	if err != nil {
@@ -88,7 +88,7 @@ func ExampleBulkUpdate() {
 	sqlTemplate := "UPDATE users SET name = ?, age = ? WHERE id = ?"
 
 	// 执行批量更新
-	err = pgbulk.BulkUpdate(db, sqlTemplate, ids, data)
+	err = pgbulk.Update(db, sqlTemplate, ids, data)
 	if err != nil {
 		fmt.Println("Bulk update failed:", err)
 		return
@@ -120,7 +120,7 @@ func ExampleBulkUpdate() {
 	// ID: 3, Name: Charlie Updated, Age: 36
 }
 
-func TestBulkUpdate(t *testing.T) {
+func TestUpdate(t *testing.T) {
 	db, err := sql.Open("postgres", "user=postgres password=secret dbname=postgres sslmode=disable")
 	if err != nil {
 		t.Fatalf("Failed to connect to database: %v", err)
@@ -156,7 +156,7 @@ func TestBulkUpdate(t *testing.T) {
 	sqlTemplate := "UPDATE users SET name = ?, age = ? WHERE id = ?"
 
 	// 执行批量更新
-	err = pgbulk.BulkUpdate(db, sqlTemplate, ids, data)
+	err = pgbulk.Update(db, sqlTemplate, ids, data)
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
 	}

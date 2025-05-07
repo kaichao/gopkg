@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestMockBulkInsertReturningID(t *testing.T) {
+func TestMockInsertReturningID(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 	defer db.Close()
@@ -38,14 +38,14 @@ func TestMockBulkInsertReturningID(t *testing.T) {
 		WithArgs(1, "a", 2, "b", 3, "c").
 		WillReturnRows(rows)
 
-	ids, err := pgbulk.BulkInsertReturningID(db, sqlTemplate, data)
+	ids, err := pgbulk.InsertReturningID(db, sqlTemplate, data)
 	assert.NoError(t, err)
 	assert.Equal(t, []int{101, 102, 103}, ids)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func ExampleBulkInsertReturningID() {
+func ExampleInsertReturningID() {
 	db, err := sql.Open("postgres", "user=postgres password=secret dbname=postgres sslmode=disable")
 	if err != nil {
 		fmt.Println("Failed to connect to database:", err)
@@ -72,7 +72,7 @@ func ExampleBulkInsertReturningID() {
 	}
 
 	// 插入并获取 ID
-	ids, err := pgbulk.BulkInsertReturningID(db, "INSERT INTO users (name, age)", data)
+	ids, err := pgbulk.InsertReturningID(db, "INSERT INTO users (name, age)", data)
 	if err != nil {
 		fmt.Println("Bulk insert failed:", err)
 		return

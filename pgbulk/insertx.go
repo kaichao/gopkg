@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// BulkInsertReturningID performs batch inserts and returns generated IDs (e.g., from a SERIAL or IDENTITY column).
-func BulkInsertReturningID(db *sql.DB, sqlTemplate string, data [][]interface{}, returningColumn ...string) ([]int, error) {
+// InsertReturningID performs batch inserts and returns generated IDs (e.g., from a SERIAL or IDENTITY column).
+func InsertReturningID(db *sql.DB, sqlTemplate string, data [][]interface{}, returningColumn ...string) ([]int, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
