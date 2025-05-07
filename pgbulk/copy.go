@@ -96,6 +96,32 @@ func Copy(db *sql.DB, sqlTemplate string, data [][]interface{}) (int, error) {
 					buffer.WriteString(strings.ReplaceAll(arrayStr, `"`, `""`))
 					buffer.WriteString(`"`)
 				}
+			case sql.NullString:
+				if v.Valid {
+					escaped := strings.ReplaceAll(v.String, `"`, `""`)
+					buffer.WriteString(`"`)
+					buffer.WriteString(escaped)
+					buffer.WriteString(`"`)
+				}
+			case sql.NullInt64:
+				if v.Valid {
+					fmt.Fprintf(&buffer, "%d", v.Int64)
+				}
+			case sql.NullFloat64:
+				if v.Valid {
+					fmt.Fprintf(&buffer, "%f", v.Float64)
+				}
+			case sql.NullBool:
+				if v.Valid {
+					fmt.Fprintf(&buffer, "%t", v.Bool)
+				}
+			case sql.NullTime:
+				if v.Valid {
+					formatted := v.Time.Format("2006-01-02 15:04:05.999999")
+					buffer.WriteString(`"`)
+					buffer.WriteString(formatted)
+					buffer.WriteString(`"`)
+				}
 			case map[string]interface{}, []interface{}:
 				// Serialize jsonb as JSON string
 				jsonBytes, err := json.Marshal(v)
