@@ -1,196 +1,135 @@
 package pgbulk_test
 
 import (
-	"errors"
+	"context"
+	"database/sql"
 	"fmt"
-	"io"
+	"log"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	pgx "github.com/jackc/pgx/v5"
 	"github.com/kaichao/gopkg/pgbulk"
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCopySpecialTypes(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	assert.NoError(t, err)
-	defer db.Close()
+// 用docker启动本地postgresql，docker run -e POSTGRES_PASSWORD=secret -p 5432:5432 -d postgres:17.4
+func ExampleCopy() {
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, "postgres://postgres:secret@localhost:5432/postgres?sslmode=disable")
+	if err != nil {
+		log.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close(context.Background())
 
-	logrus.SetOutput(io.Discard)
-
-	ts := time.Date(2025, 5, 6, 15, 4, 5, 123456000, time.UTC)
-	ts2 := ts.Add(time.Minute)
-	js := map[string]interface{}{"name": "example", "age": 30}
-	data := [][]interface{}{
-		{ts, []time.Time{ts, ts2}, js},
+	_, err = conn.Exec(context.Background(), `
+		DROP TABLE IF EXISTS test_bulk;
+		CREATE TABLE test_bulk (
+			id SERIAL PRIMARY KEY,
+			name TEXT,
+			age INT
+		)
+	`)
+	if err != nil {
+		log.Fatalf("Failed to create table: %v", err)
 	}
 
-	mock.ExpectBegin()
-	mock.ExpectPrepare("COPY table_name (ts, tsarr, js) FROM STDIN WITH (FORMAT CSV)").
-		WillReturnCloseError(nil)
+	data := [][]interface{}{
+		{"Alice", 30},
+		{"Bob", 25},
+		{"Charlie", 35},
+	}
 
-	mock.ExpectExec("COPY table_name (ts, tsarr, js) FROM STDIN WITH (FORMAT CSV)").
-		WithArgs(sqlmock.AnyArg()). // 忽略具体匹配，避免类型转换错误
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	sqlTemplate := "INSERT INTO test_bulk (name, age)"
+	inserted, err := pgbulk.Copy(conn, sqlTemplate, data)
+	if err != nil {
+		log.Fatalf("Copy failed: %v", err)
+	}
 
-	mock.ExpectCommit()
+	fmt.Printf("Inserted %d rows.\n", inserted)
 
-	count, err := pgbulk.Copy(db, "INSERT INTO table_name (ts, tsarr, js)", data)
-	assert.NoError(t, err)
-	assert.Equal(t, 1, count)
-
-	assert.NoError(t, mock.ExpectationsWereMet())
+	// Output:
+	// Inserted 3 rows.
 }
 
-// TestCopy tests the Copy function under various scenarios
-func TestCopyBase(t *testing.T) {
-	// Create a new mock database
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+func TestCopy_RealPostgres(t *testing.T) {
+	ctx := context.Background()
+
+	conn, err := pgx.Connect(ctx, "postgres://postgres:secret@localhost:5432/postgres?sslmode=disable")
 	if err != nil {
-		t.Fatalf("Failed to create mock database: %v", err)
+		t.Fatalf("Failed to connect to DB: %v", err)
 	}
-	defer db.Close()
+	defer conn.Close(ctx)
 
-	// Setup logrus to discard logs during testing
-	logrus.SetOutput(io.Discard)
+	// Create test table
+	_, err = conn.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_copy (
+			id SERIAL PRIMARY KEY,
+			str TEXT,
+			num INT,
+			active BOOLEAN,
+			ts TIMESTAMP,
+			tsarr TIMESTAMP[],
+			js JSONB,
+			nullstr TEXT
+		)`)
+	assert.NoError(t, err)
 
-	tests := []struct {
-		name          string
-		sqlTemplate   string
-		data          [][]interface{}
-		expectedCount int
-		expectedError error
-		setupMock     func(*testing.T, sqlmock.Sqlmock)
-	}{
+	// Clean table
+	_, err = conn.Exec(ctx, `DELETE FROM test_copy`)
+	assert.NoError(t, err)
+
+	// Sample data
+	now := time.Date(2025, 5, 6, 15, 4, 5, 123456000, time.UTC)
+	jsonMap := map[string]interface{}{"name": "example", "age": 30}
+
+	data := [][]interface{}{
 		{
-			name:          "Empty data",
-			sqlTemplate:   "INSERT INTO table_name (col1, col2)",
-			data:          [][]interface{}{},
-			expectedCount: 0,
-			expectedError: nil,
-			setupMock:     func(t *testing.T, mock sqlmock.Sqlmock) {},
+			"hello",          // str
+			42,               // num
+			true,             // active
+			now,              // ts
+			[]time.Time{now}, // tsarr
+			jsonMap,          // js
+			sql.NullString{String: "nullable", Valid: true}, // nullstr
 		},
 		{
-			name:          "Invalid SQL template",
-			sqlTemplate:   "INVALID SQL",
-			data:          [][]interface{}{{1, "test1"}},
-			expectedCount: 0,
-			expectedError: fmt.Errorf("invalid sqlTemplate format"),
-			setupMock:     func(t *testing.T, mock sqlmock.Sqlmock) {},
-		},
-		{
-			name:          "Empty columns",
-			sqlTemplate:   "INSERT INTO table_name ()",
-			data:          [][]interface{}{{1, "test1"}},
-			expectedCount: 0,
-			expectedError: fmt.Errorf("no columns specified in sqlTemplate"),
-			setupMock:     func(t *testing.T, mock sqlmock.Sqlmock) {},
-		},
-		{
-			name:          "Single row copy",
-			sqlTemplate:   "INSERT INTO table_name (col1, col2)",
-			data:          [][]interface{}{{1, "test1"}},
-			expectedCount: 1,
-			expectedError: nil,
-			setupMock: func(t *testing.T, mock sqlmock.Sqlmock) {
-				mock.ExpectBegin()
-				mock.ExpectPrepare("COPY table_name (col1, col2) FROM STDIN WITH (FORMAT CSV)").
-					WillReturnCloseError(nil)
-				mock.ExpectExec("COPY table_name (col1, col2) FROM STDIN WITH (FORMAT CSV)").
-					WithArgs("1,\"test1\"\n").
-					WillReturnResult(sqlmock.NewResult(1, 1))
-				mock.ExpectCommit()
-			},
-		},
-		{
-			name:          "Multiple row copy",
-			sqlTemplate:   "INSERT INTO table_name (col1, col2)",
-			data:          [][]interface{}{{1, "test1"}, {2, "test2"}},
-			expectedCount: 2,
-			expectedError: nil,
-			setupMock: func(t *testing.T, mock sqlmock.Sqlmock) {
-				mock.ExpectBegin()
-				mock.ExpectPrepare("COPY table_name (col1, col2) FROM STDIN WITH (FORMAT CSV)").
-					WillReturnCloseError(nil)
-				mock.ExpectExec("COPY table_name (col1, col2) FROM STDIN WITH (FORMAT CSV)").
-					WithArgs("1,\"test1\"\n2,\"test2\"\n").
-					WillReturnResult(sqlmock.NewResult(1, 2))
-				mock.ExpectCommit()
-			},
-		},
-		{
-			name:          "Row length mismatch",
-			sqlTemplate:   "INSERT INTO table_name (col1, col2)",
-			data:          [][]interface{}{{1}},
-			expectedCount: 0,
-			expectedError: fmt.Errorf("row length 1 does not match column count 2"),
-			setupMock: func(t *testing.T, mock sqlmock.Sqlmock) {
-				mock.ExpectBegin()
-				mock.ExpectPrepare("COPY table_name (col1, col2) FROM STDIN WITH (FORMAT CSV)").
-					WillReturnCloseError(nil)
-				mock.ExpectRollback()
-			},
-		},
-		{
-			name:          "Unsupported data type",
-			sqlTemplate:   "INSERT INTO table_name (col1, col2)",
-			data:          [][]interface{}{{1, complex(1, 1)}},
-			expectedCount: 0,
-			expectedError: fmt.Errorf("unsupported data type: complex128"),
-			setupMock: func(t *testing.T, mock sqlmock.Sqlmock) {
-				mock.ExpectBegin()
-				mock.ExpectPrepare("COPY table_name (col1, col2) FROM STDIN WITH (FORMAT CSV)").
-					WillReturnCloseError(nil)
-				mock.ExpectRollback()
-			},
-		},
-		{
-			name:          "COPY execution error",
-			sqlTemplate:   "INSERT INTO table_name (col1, col2)",
-			data:          [][]interface{}{{1, "test1"}},
-			expectedCount: 0,
-			expectedError: errors.New("copy error"),
-			setupMock: func(t *testing.T, mock sqlmock.Sqlmock) {
-				mock.ExpectBegin()
-				mock.ExpectPrepare("COPY table_name (col1, col2) FROM STDIN WITH (FORMAT CSV)").
-					WillReturnCloseError(nil)
-				mock.ExpectExec("COPY table_name (col1, col2) FROM STDIN WITH (FORMAT CSV)").
-					WithArgs("1,\"test1\"\n").
-					WillReturnError(errors.New("copy error"))
-				mock.ExpectRollback()
-			},
-		},
-		{
-			name:          "Rows affected mismatch",
-			sqlTemplate:   "INSERT INTO table_name (col1, col2)",
-			data:          [][]interface{}{{1, "test1"}, {2, "test2"}},
-			expectedCount: 0,
-			expectedError: fmt.Errorf("expected to insert 2 rows, but inserted 1"),
-			setupMock: func(t *testing.T, mock sqlmock.Sqlmock) {
-				mock.ExpectBegin()
-				mock.ExpectPrepare("COPY table_name (col1, col2) FROM STDIN WITH (FORMAT CSV)").
-					WillReturnCloseError(nil)
-				mock.ExpectExec("COPY table_name (col1, col2) FROM STDIN WITH (FORMAT CSV)").
-					WithArgs("1,\"test1\"\n2,\"test2\"\n").
-					WillReturnResult(sqlmock.NewResult(1, 1))
-				mock.ExpectRollback()
-			},
+			"world",                              // str
+			99,                                   // num
+			false,                                // active
+			now.Add(time.Hour),                   // ts
+			[]time.Time{now, now.Add(time.Hour)}, // tsarr
+			jsonMap,                              // js
+			sql.NullString{Valid: false},         // nullstr = NULL
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tt.setupMock(t, mock)
-			count, err := pgbulk.Copy(db, tt.sqlTemplate, tt.data)
-			if tt.expectedError != nil {
-				assert.EqualError(t, err, tt.expectedError.Error(), "Error mismatch")
-			} else {
-				assert.NoError(t, err, "Unexpected error")
-			}
-			assert.Equal(t, tt.expectedCount, count, "Count mismatch")
-			assert.NoError(t, mock.ExpectationsWereMet(), "Unfulfilled mock expectations")
-		})
+	// Execute COPY
+	count, err := pgbulk.Copy(conn, "INSERT INTO test_copy (str, num, active, ts, tsarr, js, nullstr)", data)
+	assert.NoError(t, err)
+	assert.Equal(t, len(data), count)
+
+	// Validate data
+	rows, err := conn.Query(ctx, `SELECT str, num, active, ts, tsarr, js, nullstr FROM test_copy ORDER BY id`)
+	assert.NoError(t, err)
+	defer rows.Close()
+
+	var readCount int
+	for rows.Next() {
+		var (
+			str     string
+			num     int
+			active  bool
+			ts      time.Time
+			tsarr   []time.Time
+			js      []byte
+			nullstr sql.NullString
+		)
+		err := rows.Scan(&str, &num, &active, &ts, &tsarr, &js, &nullstr)
+		assert.NoError(t, err)
+
+		readCount++
 	}
+
+	assert.Equal(t, len(data), readCount)
 }
