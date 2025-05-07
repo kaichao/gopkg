@@ -122,7 +122,7 @@ func Copy(db *sql.DB, sqlTemplate string, data [][]interface{}) (int, error) {
 					buffer.WriteString(formatted)
 					buffer.WriteString(`"`)
 				}
-			case map[string]interface{}, []interface{}:
+			case map[string]interface{}, map[string]string, []interface{}:
 				// Serialize jsonb as JSON string
 				jsonBytes, err := json.Marshal(v)
 				if err != nil {
