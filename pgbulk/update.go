@@ -8,9 +8,14 @@ import (
 )
 
 // Update performs a bulk update using the provided SQL template, data, and ids.
-func Update(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, ids [][]interface{}) error {
+// 修改：返回值从 error 改为 (error, int)，返回成功更新的记录数
+func Update(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, ids [][]interface{}) (error, int) {
 	if len(data) != len(ids) {
-		return fmt.Errorf("data and ids must have the same number of rows")
+		return fmt.Errorf("data and ids must have the same number of rows"), 0
+	}
+
+	if len(data) == 0 {
+		return nil, 0
 	}
 
 	batch := &pgx.Batch{}
@@ -24,12 +29,19 @@ func Update(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, ids [][]in
 	br := conn.SendBatch(context.Background(), batch)
 	defer br.Close()
 
+	// 新增：统计成功更新的记录数
+	rowsAffected := 0
+
 	// Check each result
 	for i := 0; i < batch.Len(); i++ {
-		_, err := br.Exec()
+		ct, err := br.Exec()
 		if err != nil {
-			return fmt.Errorf("batch execution failed at record %d: %v", i, err)
+			// 修改：返回当前 rowsAffected
+			return fmt.Errorf("batch execution failed at record %d: %v", i, err), rowsAffected
 		}
+		// 新增：累加受影响的行数
+		rowsAffected += int(ct.RowsAffected())
 	}
-	return nil
+	// 修改：返回 nil 和 rowsAffected
+	return nil, rowsAffected
 }
