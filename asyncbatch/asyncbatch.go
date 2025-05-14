@@ -1,34 +1,5 @@
 package asyncbatch
 
-/*
-Package asyncbatch provides a generic asynchronous batch processing queue, suitable for scenarios that require efficient handling of large volumes of data.
-
-Main features:
-- Accepts data via an asynchronous queue and processes it in batches.
-- Invokes a user-defined processing function when a batch reaches a specified size or a timeout occurs.
-- Thread-safe submission and processing of data.
-- Graceful shutdown mechanism to ensure all data is processed before exit.
-
-Use cases:
-- Log collection and bulk database insertion.
-- Batch API request optimization to reduce call frequency.
-- Asynchronous message processing, such as queue consumption.
-
-Example usage:
-
-	b := asyncbatch.New(5, 10, 2*time.Second, func(batch []string) {
-		fmt.Println("Processing batch:", batch)
-	})
-
-	for i := 1; i <= 20; i++ {
-		b.Submit(fmt.Sprintf("Record-%d", i))
-	}
-
-	time.Sleep(5 * time.Second)
-	b.Stop()
-
-*/
-
 import (
 	"fmt"
 	"log"
