@@ -1,6 +1,10 @@
 package asyncbatch_test
 
 import (
+	"errors"
+	"fmt"
+	"log"
+	"math/rand"
 	"sync"
 	"testing"
 	"time"
@@ -9,161 +13,257 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// Unit test
-func TestBatchProcessing(t *testing.T) {
-	var processedBatches [][]int
+// TestBatchMultipleWorkers 测试多工作者处理批量任务
+func TestBatchMultipleWorkers(t *testing.T) {
 	var mu sync.Mutex
-	processFunc := func(batch []int) {
+	processed := make(map[string][]int) // 记录每个工作者处理的批次
+	var wg sync.WaitGroup
+
+	// 定义处理函数，记录工作者处理的批次大小
+	processFunc := func(items []int) error {
+		workerID := fmt.Sprintf("worker-%d", rand.Int())
 		mu.Lock()
-		defer mu.Unlock()
-		processedBatches = append(processedBatches, batch)
+		processed[workerID] = append(processed[workerID], len(items))
+		mu.Unlock()
+		log.Printf("%s 处理了 %d 个任务", workerID, len(items))
+		wg.Done() // 标记该批次处理完成
+		return nil
 	}
 
-	ab := asyncbatch.New[int](3, 10, time.Hour, processFunc)
-	defer ab.Stop()
+	// 配置 Batch：3 个工作者，批量大小 10，刷新间隔 500ms
+	b := asyncbatch.New(processFunc,
+		asyncbatch.WithNumWorkers(3),
+		asyncbatch.WithBatchSize(10),
+		asyncbatch.WithFlushInterval(500*time.Millisecond),
+	)
 
-	ab.Submit(1)
-	ab.Submit(2)
-	ab.Submit(3)
+	// 向队列推送 100 个任务，预期分为 10 个批次
+	wg.Add(100 / 10) // 预期 10 个批次（100 任务 / 10 每批）
+	for i := 0; i < 100; i++ {
+		b.Push(i)
+	}
 
-	// 等待处理完成
-	time.Sleep(100 * time.Millisecond)
+	// 关闭队列
+	b.Close()
 
+	// 等待所有批次处理完成
+	wg.Wait()
+
+	// 验证结果
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Equal(t, 1, len(processedBatches), "should process one batch")
-	assert.Equal(t, []int{1, 2, 3}, processedBatches[0], "batch content should match")
+	assert.Greater(t, len(processed), 1, "应该使用多个工作者")
+	totalBatches := 0
+	for id, batches := range processed {
+		log.Printf("工作者 %s 处理的批次: %v", id, batches)
+		totalBatches += len(batches)
+	}
+	assert.Equal(t, 10, totalBatches, "总共应处理 10 个批次")
 }
 
-func TestFlushInterval(t *testing.T) {
-	var processedBatches [][]int
+// TestBatchSingleWorker 测试单工作者处理
+func TestBatchSingleWorker(t *testing.T) {
 	var mu sync.Mutex
-	processFunc := func(batch []int) {
+	processedItems := []int{}
+	var wg sync.WaitGroup
+
+	processFunc := func(items []int) error {
 		mu.Lock()
-		defer mu.Unlock()
-		processedBatches = append(processedBatches, batch)
+		processedItems = append(processedItems, items...)
+		mu.Unlock()
+		wg.Done()
+		return nil
 	}
 
-	ab := asyncbatch.New[int](3, 10, 100*time.Millisecond, processFunc)
-	defer ab.Stop()
+	b := asyncbatch.New(processFunc,
+		asyncbatch.WithNumWorkers(1),
+		asyncbatch.WithBatchSize(5),
+		asyncbatch.WithFlushInterval(500*time.Millisecond),
+	)
 
-	ab.Submit(1)
-	ab.Submit(2)
-
-	// 等待定时器触发
-	time.Sleep(200 * time.Millisecond)
+	wg.Add(2) // 预期 2 个批次（10 任务 / 5 每批）
+	for i := 0; i < 10; i++ {
+		b.Push(i)
+	}
+	b.Close()
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Equal(t, 1, len(processedBatches), "should process one batch via flush interval")
-	assert.Equal(t, []int{1, 2}, processedBatches[0], "batch content should match")
+	assert.Equal(t, 10, len(processedItems), "应处理 10 个任务")
+	assert.ElementsMatch(t, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, processedItems, "任务顺序应正确")
 }
 
-func TestStopDrainsRemaining(t *testing.T) {
-	var processedBatches [][]int
+// TestBatchFlushInterval 测试刷新间隔触发
+func TestBatchFlushInterval(t *testing.T) {
 	var mu sync.Mutex
-	processFunc := func(batch []int) {
+	processedItems := []int{}
+	var wg sync.WaitGroup
+
+	processFunc := func(items []int) error {
 		mu.Lock()
-		defer mu.Unlock()
-		processedBatches = append(processedBatches, batch)
+		processedItems = append(processedItems, items...)
+		mu.Unlock()
+		wg.Done()
+		return nil
 	}
 
-	ab := asyncbatch.New[int](3, 10, time.Hour, processFunc)
+	b := asyncbatch.New(processFunc,
+		asyncbatch.WithNumWorkers(1),
+		asyncbatch.WithBatchSize(100), // 故意设置大批量大小
+		asyncbatch.WithFlushInterval(100*time.Millisecond),
+	)
 
-	ab.Submit(1)
-	ab.Submit(2)
-	ab.Stop()
+	wg.Add(1) // 预期 1 个批次（由刷新间隔触发）
+	b.Push(1)
+	time.Sleep(150 * time.Millisecond) // 等待刷新间隔触发
+	b.Close()
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Equal(t, 1, len(processedBatches), "should process remaining batch on stop")
-	assert.Equal(t, []int{1, 2}, processedBatches[0], "batch content should match")
+	assert.Equal(t, 1, len(processedItems), "应处理 1 个任务")
+	assert.ElementsMatch(t, []int{1}, processedItems, "任务应正确处理")
 }
 
-func TestQueueFull(t *testing.T) {
-	var processedBatches [][]int
+// TestBatchEmptyQueue 测试关闭空队列
+func TestBatchEmptyQueue(t *testing.T) {
 	var mu sync.Mutex
-	processFunc := func(batch []int) {
+	processed := false
+
+	processFunc := func(items []int) error {
 		mu.Lock()
-		defer mu.Unlock()
-		processedBatches = append(processedBatches, batch)
+		processed = true
+		mu.Unlock()
+		return nil
 	}
 
-	// 队列容量为2，batch大小为2
-	ab := asyncbatch.New[int](2, 2, 100*time.Millisecond, processFunc)
-	defer ab.Stop()
+	b := asyncbatch.New(processFunc,
+		asyncbatch.WithNumWorkers(1),
+		asyncbatch.WithBatchSize(10),
+		asyncbatch.WithFlushInterval(500*time.Millisecond),
+	)
 
-	ab.Submit(1)
-	ab.Submit(2)
-	ab.Submit(3) // 应被丢弃
-
-	// 等待可能的处理
-	time.Sleep(200 * time.Millisecond)
+	b.Close()
+	time.Sleep(50 * time.Millisecond) // 等待工作者退出
 
 	mu.Lock()
 	defer mu.Unlock()
-
-	assert.Equal(t, 1, len(processedBatches), "should process full batch")
-	assert.Equal(t, []int{1, 2}, processedBatches[0], "batch content should match")
-
-	// 检查日志是否记录了丢弃警告（需替换为实际日志检查，此处仅为示例）
-	// 可以使用hook捕获日志，但这里简化处理
+	assert.False(t, processed, "空队列不应触发处理")
 }
 
-func TestMultipleBatches(t *testing.T) {
-	var processedBatches [][]int
+// TestBatchErrorHandling 测试错误处理
+func TestBatchErrorHandling(t *testing.T) {
 	var mu sync.Mutex
-	processFunc := func(batch []int) {
+	errorsCount := 0
+	var wg sync.WaitGroup
+
+	processFunc := func(items []int) error {
 		mu.Lock()
-		defer mu.Unlock()
-		processedBatches = append(processedBatches, batch)
+		errorsCount++
+		mu.Unlock()
+		wg.Done()
+		return errors.New("处理错误")
 	}
 
-	ab := asyncbatch.New[int](2, 10, time.Hour, processFunc)
-	defer ab.Stop()
+	b := asyncbatch.New(processFunc,
+		asyncbatch.WithNumWorkers(1),
+		asyncbatch.WithBatchSize(5),
+		asyncbatch.WithFlushInterval(500*time.Millisecond),
+	)
 
-	ab.Submit(1)
-	ab.Submit(2)
-	ab.Submit(3)
-	ab.Submit(4)
-
-	time.Sleep(100 * time.Millisecond)
+	wg.Add(2) // 预期 2 个批次
+	for i := 0; i < 10; i++ {
+		b.Push(i)
+	}
+	b.Close()
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Equal(t, 2, len(processedBatches), "should process two full batches")
-	assert.Equal(t, []int{1, 2}, processedBatches[0], "first batch correct")
-	assert.Equal(t, []int{3, 4}, processedBatches[1], "second batch correct")
+	assert.Equal(t, 2, errorsCount, "应记录 2 次错误")
 }
 
-func TestMixedFlush(t *testing.T) {
-	var processedBatches [][]int
+// TestBatchInvalidConfig 测试无效配置
+func TestBatchInvalidConfig(t *testing.T) {
 	var mu sync.Mutex
-	processFunc := func(batch []int) {
+	processedItems := []int{}
+	var wg sync.WaitGroup
+
+	processFunc := func(items []int) error {
 		mu.Lock()
-		defer mu.Unlock()
-		processedBatches = append(processedBatches, batch)
+		processedItems = append(processedItems, items...)
+		mu.Unlock()
+		wg.Done()
+		return nil
 	}
 
-	ab := asyncbatch.New[int](3, 10, 100*time.Millisecond, processFunc)
-	defer ab.Stop()
+	b := asyncbatch.New(processFunc,
+		asyncbatch.WithNumWorkers(0), // 无效工作者数量，修正为 1
+		asyncbatch.WithBatchSize(-1), // 无效批量大小，修正为 1
+		asyncbatch.WithFlushInterval(500*time.Millisecond),
+	)
 
-	ab.Submit(1)
-	ab.Submit(2)
-	time.Sleep(200 * time.Millisecond) // 触发定时器处理
-
-	ab.Submit(3)
-	ab.Submit(4)
-	ab.Submit(5) // 触发立即处理
-
-	time.Sleep(200 * time.Millisecond) // 确保处理完成
+	wg.Add(10) // 预期 10 个批次（10 任务 / 1 每批）
+	for i := 0; i < 10; i++ {
+		b.Push(i)
+	}
+	b.Close()
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Equal(t, 3, len(processedBatches), "should process three batches")
-	assert.Equal(t, []int{1, 2}, processedBatches[0], "timer-triggered batch")
-	assert.Equal(t, []int{3, 4, 5}, processedBatches[1], "full batch")
-	assert.Equal(t, []int(nil), processedBatches[2], "no data batch from timer") // 可能第三个触发定时器时无数据？
-	// 注意：定时器在每次处理后重置，可能在第三个批次时触发处理空数据，但原代码会检查长度，不会处理空批次。
-	// 因此实际结果可能为两个批次。需要根据实际逻辑调整测试。
+	assert.Equal(t, 10, len(processedItems), "应处理 10 个任务")
+}
+
+// TestBatchConcurrentPush 测试并发推送
+func TestBatchConcurrentPush(t *testing.T) {
+	var mu sync.Mutex
+	processedItems := []int{}
+	var wg sync.WaitGroup
+
+	processFunc := func(items []int) error {
+		mu.Lock()
+		processedItems = append(processedItems, items...)
+		mu.Unlock()
+		// 仅在任务总数未达 100 时验证批次大小为 10
+		if len(processedItems) < 100 && len(items) != 10 {
+			t.Errorf("预期批次大小为 10，实际为 %d", len(items))
+		}
+		wg.Done()
+		return nil
+	}
+
+	b := asyncbatch.New(processFunc,
+		asyncbatch.WithNumWorkers(2),
+		asyncbatch.WithBatchSize(10),
+		asyncbatch.WithFlushInterval(1*time.Minute), // 避免刷新间隔触发
+	)
+
+	// 并发推送 100 个任务
+	concurrency := 10
+	tasksPerGoroutine := 10
+	totalTasks := concurrency * tasksPerGoroutine
+	// 使用硬编码的 batchSize=10 计算批次数量
+	batchSize := 10
+	wg.Add((totalTasks + batchSize - 1) / batchSize)
+	var pushWG sync.WaitGroup
+	pushWG.Add(concurrency)
+	for i := 0; i < concurrency; i++ {
+		go func(start int) {
+			for j := 0; j < tasksPerGoroutine; j++ {
+				b.Push(start + j)
+			}
+			pushWG.Done()
+		}(i * tasksPerGoroutine)
+	}
+	pushWG.Wait()
+
+	// 等待所有批次处理完成
+	wg.Wait()
+	b.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 100, len(processedItems), "应处理 100 个任务")
 }

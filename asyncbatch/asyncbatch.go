@@ -16,134 +16,128 @@ Use cases:
 
 Example usage:
 
-	processor := asyncbatch.New(5, 10, 2*time.Second, func(batch []string) {
+	b := asyncbatch.New(5, 10, 2*time.Second, func(batch []string) {
 		fmt.Println("Processing batch:", batch)
 	})
 
 	for i := 1; i <= 20; i++ {
-		processor.Submit(fmt.Sprintf("Record-%d", i))
+		b.Submit(fmt.Sprintf("Record-%d", i))
 	}
 
 	time.Sleep(5 * time.Second)
-	processor.Stop()
+	b.Stop()
 
 */
 
 import (
-	"sync"
+	"fmt"
+	"log"
 	"time"
+	"unsafe"
 
-	"github.com/sirupsen/logrus"
+	"math/rand"
 )
 
-// AsyncBatch is a generic asynchronous batch processing queue.
-type AsyncBatch[T any] struct {
-	inputChan     chan T
+// Batch ...
+type Batch[T any] struct {
+	processFunc   func([]T) error
+	q             chan T
+	numWorkers    int
 	batchSize     int
 	flushInterval time.Duration
-	done          chan struct{}
-	processFunc   func([]T)
-	wg            sync.WaitGroup
 }
 
-// New creates a new asynchronous batch processing queue.
-func New[T any](batchSize int, queueSize int, flushInterval time.Duration, processFunc func([]T)) *AsyncBatch[T] {
-	if batchSize <= 0 {
-		batchSize = 1000
-	}
-	if queueSize <= 0 {
-		queueSize = 10 * batchSize
-	}
-	if processFunc == nil {
-		logrus.Errorln("processFunc must not be nil")
-		return nil
-	}
+// Option 配置选项
+type Option func(*Batch[any])
 
-	ab := &AsyncBatch[T]{
-		inputChan:     make(chan T, queueSize),
-		batchSize:     batchSize,
-		flushInterval: flushInterval,
-		done:          make(chan struct{}),
-		processFunc:   processFunc,
-	}
-	ab.wg.Add(1)
-	go ab.run()
-	return ab
-}
-
-// Submit submits a single element to the asynchronous queue.
-func (ab *AsyncBatch[T]) Submit(item T) {
-	select {
-	case ab.inputChan <- item:
-	default:
-		logrus.Warn("asyncbatch: queue full, dropping data")
+// WithNumWorkers 设置工作者数量
+func WithNumWorkers(numWorkers int) Option {
+	return func(b *Batch[any]) {
+		if numWorkers < 1 {
+			numWorkers = 1
+		}
+		b.numWorkers = numWorkers
 	}
 }
 
-// run listens to the asynchronous queue and processes data in batches.
-func (ab *AsyncBatch[T]) run() {
-	defer ab.wg.Done()
+// WithBatchSize 设置批量大小
+func WithBatchSize(size int) Option {
+	return func(b *Batch[any]) {
+		if size < 1 {
+			size = 1
+		}
+		b.batchSize = size
+	}
+}
 
+// WithFlushInterval 设置刷新间隔
+func WithFlushInterval(d time.Duration) Option {
+	return func(b *Batch[any]) {
+		b.flushInterval = d
+	}
+}
+
+const defaultChanSize = 1000
+
+// New 创建 Batch 实例
+func New[T any](processFunc func([]T) error, opts ...Option) *Batch[T] {
+	b := &Batch[T]{
+		processFunc: processFunc,
+		q:           make(chan T, 100),
+		numWorkers:  1,
+	}
+	// 将 Batch[T] 转换为 Batch[any] 以应用 Option
+	bAny := (*Batch[any])(unsafe.Pointer(b))
+	for _, opt := range opts {
+		opt(bAny)
+	}
+	for i := 0; i < b.numWorkers; i++ {
+		go b.run()
+	}
+	return b
+}
+
+// run 工作者主循环
+func (b *Batch[T]) run() {
 	var batch []T
-	timer := time.NewTimer(ab.flushInterval)
-	if ab.flushInterval <= 0 {
-		timer.Stop()
-	}
-	defer timer.Stop()
+	ticker := time.NewTicker(b.flushInterval)
+	defer ticker.Stop()
+	workerID := fmt.Sprintf("worker-%d", rand.Int())
+	log.Printf("%s started", workerID)
 
 	for {
 		select {
-		case <-ab.done:
-			// 处理当前批次的数据
-			if len(batch) > 0 {
-				ab.processFunc(batch)
-				batch = nil
-			}
-			// 排空 inputChan 中的剩余数据
-		drainLoop:
-			for {
-				select {
-				case item := <-ab.inputChan:
-					batch = append(batch, item)
-					if len(batch) >= ab.batchSize {
-						ab.processFunc(batch)
-						batch = nil
-					}
-				default:
-					break drainLoop
+		case item, ok := <-b.q:
+			if !ok {
+				if len(batch) > 0 {
+					log.Printf("%s processing %d items", workerID, len(batch))
+					_ = b.processFunc(batch)
 				}
+				log.Printf("%s stopped", workerID)
+				return
 			}
-			// 处理最后剩余的批次
-			if len(batch) > 0 {
-				ab.processFunc(batch)
-			}
-			return
-
-		case item := <-ab.inputChan:
 			batch = append(batch, item)
-			if len(batch) >= ab.batchSize {
-				ab.processFunc(batch)
+			if len(batch) >= b.batchSize {
+				log.Printf("%s processing %d items", workerID, len(batch))
+				_ = b.processFunc(batch)
 				batch = nil
-				// 重置定时器
-				if ab.flushInterval > 0 {
-					timer.Reset(ab.flushInterval)
-				}
 			}
-		case <-timer.C:
+		case <-ticker.C:
 			if len(batch) > 0 {
-				ab.processFunc(batch)
+				log.Printf("%s flushing %d items", workerID, len(batch))
+				_ = b.processFunc(batch)
 				batch = nil
-			}
-			// 重置定时器
-			if ab.flushInterval > 0 {
-				timer.Reset(ab.flushInterval)
 			}
 		}
 	}
 }
 
-// Stop stops the asynchronous batch processing queue.
-func (ab *AsyncBatch[T]) Stop() {
-	close(ab.done)
-	ab.wg.Wait()
+// Push 向队列添加任务
+func (b *Batch[T]) Push(item T) {
+	b.q <- item
+}
+
+// Close 关闭队列
+func (b *Batch[T]) Close() {
+	close(b.q)
 }
