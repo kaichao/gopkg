@@ -54,7 +54,7 @@ func TestUpdateExample(t *testing.T) {
 	}
 
 	// 执行更新
-	err, _ = pgbulk.Update(conn, sqlTemplate, data, ids)
+	_, err = pgbulk.Update(conn, sqlTemplate, data, ids)
 	if err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}

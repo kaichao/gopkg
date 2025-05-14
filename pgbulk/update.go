@@ -10,9 +10,9 @@ import (
 
 // Update performs a bulk update using the provided SQL template, data, and ids.
 // 返回值：(error, [][]interface{})，第二个参数为失败记录的 ids
-func Update(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, ids [][]interface{}) (error, [][]interface{}) {
+func Update(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, ids [][]interface{}) ([][]interface{}, error) {
 	if len(data) != len(ids) {
-		return fmt.Errorf("data and ids must have the same number of rows"), nil
+		return nil, fmt.Errorf("data and ids must have the same number of rows")
 	}
 
 	if len(data) == 0 {
@@ -26,7 +26,7 @@ func Update(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, ids [][]in
 	// 开始事务
 	tx, err := conn.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to start transaction: %v", err), nil
+		return nil, fmt.Errorf("failed to start transaction: %v", err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -48,18 +48,18 @@ func Update(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, ids [][]in
 			failedIds = append(failedIds, ids[i])
 			// 立即关闭批量操作，确保资源释放
 			br.Close()
-			return fmt.Errorf("batch execution failed for record %d: %v", i, err), failedIds
+			return failedIds, fmt.Errorf("batch execution failed for record %d: %v", i, err)
 		}
 	}
 
 	// 关闭批量操作
 	if err := br.Close(); err != nil {
-		return fmt.Errorf("failed to close batch: %v", err), failedIds
+		return failedIds, fmt.Errorf("failed to close batch: %v", err)
 	}
 
 	// 提交事务
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %v", err), failedIds
+		return failedIds, fmt.Errorf("failed to commit transaction: %v", err)
 	}
 
 	return nil, nil

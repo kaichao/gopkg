@@ -19,14 +19,6 @@ Database caching layer via [go-cache](https://github.com/patrickmn/go-cache), su
 Cross-environment command executor (local/SSH) with stdout/stderr capture.
 
 
-## Installation
-
-To install the `gopkg` package, run the following command:
-
-```bash
-go get github.com/kaichao/gopkg
-```
-
 ## License
 
 MIT License

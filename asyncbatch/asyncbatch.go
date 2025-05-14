@@ -54,7 +54,7 @@ const defaultChanSize = 1000
 func New[T any](processFunc func([]T) error, opts ...Option) *Batch[T] {
 	b := &Batch[T]{
 		processFunc: processFunc,
-		q:           make(chan T, 100),
+		q:           make(chan T, defaultChanSize),
 		numWorkers:  1,
 	}
 	// 将 Batch[T] 转换为 Batch[any] 以应用 Option
