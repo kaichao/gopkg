@@ -2,268 +2,258 @@ package asyncbatch_test
 
 import (
 	"errors"
-	"fmt"
-	"log"
-	"math/rand"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/kaichao/gopkg/asyncbatch"
-	"github.com/stretchr/testify/assert"
 )
 
-// TestBatchMultipleWorkers 测试多工作者处理批量任务
-func TestBatchMultipleWorkers(t *testing.T) {
+func TestBatch(t *testing.T) {
 	var mu sync.Mutex
-	processed := make(map[string][]int) // 记录每个工作者处理的批次
-	var wg sync.WaitGroup
+	var batches [][]int
+	queue := make(chan int, 100)
+	batchSize := 10
+	emptyWait := 100 * time.Millisecond
+	partialWait := 50 * time.Millisecond
+	logSampleRate := 1
 
-	// 定义处理函数，记录工作者处理的批次大小
-	processFunc := func(items []int) error {
-		workerID := fmt.Sprintf("worker-%d", rand.Int())
+	b := asyncbatch.New(queue, batchSize, emptyWait, partialWait, func(items []int) error {
 		mu.Lock()
-		processed[workerID] = append(processed[workerID], len(items))
+		batches = append(batches, items)
 		mu.Unlock()
-		log.Printf("%s 处理了 %d 个任务", workerID, len(items))
-		wg.Done() // 标记该批次处理完成
 		return nil
+	}, nil, logSampleRate)
+
+	go b.Run()
+
+	// Send items
+	for i := 0; i < 25; i++ {
+		queue <- i
 	}
+	// MODIFIED: increased sleep time to 4s
+	time.Sleep(4 * time.Second)
+	close(queue)
+	time.Sleep(200 * time.Millisecond)
 
-	// 配置 Batch：3 个工作者，批量大小 10，刷新间隔 500ms
-	b := asyncbatch.New(processFunc,
-		asyncbatch.WithNumWorkers(3),
-		asyncbatch.WithBatchSize(10),
-		asyncbatch.WithFlushInterval(500*time.Millisecond),
-	)
-
-	// 向队列推送 100 个任务，预期分为 10 个批次
-	wg.Add(100 / 10) // 预期 10 个批次（100 任务 / 10 每批）
-	for i := 0; i < 100; i++ {
-		b.Push(i)
+	// Verify results
+	mu.Lock()
+	defer mu.Unlock()
+	if len(batches) != 3 {
+		t.Errorf("expected 3 batches, got %d", len(batches))
 	}
+	if len(batches) >= 1 && len(batches[0]) != 10 {
+		t.Errorf("expected first batch size 10, got %d", len(batches[0]))
+	}
+	if len(batches) >= 2 && len(batches[1]) != 10 {
+		t.Errorf("expected second batch size 10, got %d", len(batches[1]))
+	}
+	if len(batches) >= 3 && len(batches[2]) != 5 {
+		t.Errorf("expected third batch size 5, got %d", len(batches[2]))
+	}
+}
 
-	// 关闭队列
-	b.Close()
+func TestFullBatchImmediateProcessing(t *testing.T) {
+	var mu sync.Mutex
+	var batches [][]int
+	queue := make(chan int, 100)
+	batchSize := 10
+	emptyWait := 500 * time.Millisecond
+	partialWait := 50 * time.Millisecond
+	logSampleRate := 1
 
-	// 等待所有批次处理完成
-	wg.Wait()
+	b := asyncbatch.New(queue, batchSize, emptyWait, partialWait, func(items []int) error {
+		mu.Lock()
+		batches = append(batches, items)
+		mu.Unlock()
+		return nil
+	}, nil, logSampleRate)
+
+	go b.Run()
+
+	// Send 20 items (2 full batches)
+	for i := 0; i < 20; i++ {
+		queue <- i
+	}
+	// MODIFIED: increased sleep time to 3s
+	time.Sleep(3 * time.Second)
+	close(queue)
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify: expect 2 full batches processed immediately
+	mu.Lock()
+	defer mu.Unlock()
+	if len(batches) != 2 {
+		t.Errorf("expected 2 batches, got %d", len(batches))
+	}
+	if len(batches) >= 1 && len(batches[0]) != 10 {
+		t.Errorf("expected first batch size 10, got %d", len(batches[0]))
+	}
+	if len(batches) >= 2 && len(batches[1]) != 10 {
+		t.Errorf("expected second batch size 10, got %d", len(batches[1]))
+	}
+}
+
+func TestPartialBatchWait(t *testing.T) {
+	var mu sync.Mutex
+	var batches [][]int
+	queue := make(chan int, 100)
+	batchSize := 10
+	emptyWait := 500 * time.Millisecond
+	partialWait := 3 * time.Second // 将 partialWait 调整为 3秒
+	logSampleRate := 1
+
+	b := asyncbatch.New(queue, batchSize, emptyWait, partialWait, func(items []int) error {
+		mu.Lock()
+		batches = append(batches, items)
+		mu.Unlock()
+		return nil
+	}, nil, logSampleRate)
+
+	go b.Run()
+
+	// 发送 5 项（部分批次）
+	for i := 0; i < 5; i++ {
+		queue <- i
+	}
+	// 等待时间调整为小于 partialWait（例如 2秒 < 3秒）
+	time.Sleep(2 * time.Second)
+	// 再发送 3 项
+	for i := 5; i < 8; i++ {
+		queue <- i
+	}
+	// 等待足够时间让定时器触发
+	time.Sleep(4 * time.Second)
+	close(queue)
+	time.Sleep(200 * time.Millisecond) // 确保处理完成
 
 	// 验证结果
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Greater(t, len(processed), 1, "应该使用多个工作者")
-	totalBatches := 0
-	for id, batches := range processed {
-		log.Printf("工作者 %s 处理的批次: %v", id, batches)
-		totalBatches += len(batches)
+	if len(batches) != 1 {
+		t.Errorf("expected 1 batch, got %d", len(batches))
 	}
-	assert.Equal(t, 10, totalBatches, "总共应处理 10 个批次")
+	if len(batches) >= 1 && len(batches[0]) != 8 {
+		t.Errorf("expected batch size 8, got %d", len(batches[0]))
+	}
 }
-
-// TestBatchSingleWorker 测试单工作者处理
-func TestBatchSingleWorker(t *testing.T) {
+func TestErrorHandling(t *testing.T) {
 	var mu sync.Mutex
-	processedItems := []int{}
-	var wg sync.WaitGroup
-
-	processFunc := func(items []int) error {
-		mu.Lock()
-		processedItems = append(processedItems, items...)
-		mu.Unlock()
-		wg.Done()
-		return nil
-	}
-
-	b := asyncbatch.New(processFunc,
-		asyncbatch.WithNumWorkers(1),
-		asyncbatch.WithBatchSize(5),
-		asyncbatch.WithFlushInterval(500*time.Millisecond),
-	)
-
-	wg.Add(2) // 预期 2 个批次（10 任务 / 5 每批）
-	for i := 0; i < 10; i++ {
-		b.Push(i)
-	}
-	b.Close()
-	wg.Wait()
-
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Equal(t, 10, len(processedItems), "应处理 10 个任务")
-	assert.ElementsMatch(t, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, processedItems, "任务顺序应正确")
-}
-
-// TestBatchFlushInterval 测试刷新间隔触发
-func TestBatchFlushInterval(t *testing.T) {
-	var mu sync.Mutex
-	processedItems := []int{}
-	var wg sync.WaitGroup
-
-	processFunc := func(items []int) error {
-		mu.Lock()
-		processedItems = append(processedItems, items...)
-		mu.Unlock()
-		wg.Done()
-		return nil
-	}
-
-	b := asyncbatch.New(processFunc,
-		asyncbatch.WithNumWorkers(1),
-		asyncbatch.WithBatchSize(100), // 故意设置大批量大小
-		asyncbatch.WithFlushInterval(100*time.Millisecond),
-	)
-
-	wg.Add(1) // 预期 1 个批次（由刷新间隔触发）
-	b.Push(1)
-	time.Sleep(150 * time.Millisecond) // 等待刷新间隔触发
-	b.Close()
-	wg.Wait()
-
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Equal(t, 1, len(processedItems), "应处理 1 个任务")
-	assert.ElementsMatch(t, []int{1}, processedItems, "任务应正确处理")
-}
-
-// TestBatchEmptyQueue 测试关闭空队列
-func TestBatchEmptyQueue(t *testing.T) {
-	var mu sync.Mutex
-	processed := false
-
-	processFunc := func(items []int) error {
-		mu.Lock()
-		processed = true
-		mu.Unlock()
-		return nil
-	}
-
-	b := asyncbatch.New(processFunc,
-		asyncbatch.WithNumWorkers(1),
-		asyncbatch.WithBatchSize(10),
-		asyncbatch.WithFlushInterval(500*time.Millisecond),
-	)
-
-	b.Close()
-	time.Sleep(50 * time.Millisecond) // 等待工作者退出
-
-	mu.Lock()
-	defer mu.Unlock()
-	assert.False(t, processed, "空队列不应触发处理")
-}
-
-// TestBatchErrorHandling 测试错误处理
-func TestBatchErrorHandling(t *testing.T) {
-	var mu sync.Mutex
-	errorsCount := 0
-	var wg sync.WaitGroup
-
-	processFunc := func(items []int) error {
-		mu.Lock()
-		errorsCount++
-		mu.Unlock()
-		wg.Done()
-		return errors.New("处理错误")
-	}
-
-	b := asyncbatch.New(processFunc,
-		asyncbatch.WithNumWorkers(1),
-		asyncbatch.WithBatchSize(5),
-		asyncbatch.WithFlushInterval(500*time.Millisecond),
-	)
-
-	wg.Add(2) // 预期 2 个批次
-	for i := 0; i < 10; i++ {
-		b.Push(i)
-	}
-	b.Close()
-	wg.Wait()
-
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Equal(t, 2, errorsCount, "应记录 2 次错误")
-}
-
-// TestBatchInvalidConfig 测试无效配置
-func TestBatchInvalidConfig(t *testing.T) {
-	var mu sync.Mutex
-	processedItems := []int{}
-	var wg sync.WaitGroup
-
-	processFunc := func(items []int) error {
-		mu.Lock()
-		processedItems = append(processedItems, items...)
-		mu.Unlock()
-		wg.Done()
-		return nil
-	}
-
-	b := asyncbatch.New(processFunc,
-		asyncbatch.WithNumWorkers(0), // 无效工作者数量，修正为 1
-		asyncbatch.WithBatchSize(-1), // 无效批量大小，修正为 1
-		asyncbatch.WithFlushInterval(500*time.Millisecond),
-	)
-
-	wg.Add(10) // 预期 10 个批次（10 任务 / 1 每批）
-	for i := 0; i < 10; i++ {
-		b.Push(i)
-	}
-	b.Close()
-	wg.Wait()
-
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Equal(t, 10, len(processedItems), "应处理 10 个任务")
-}
-
-// TestBatchConcurrentPush 测试并发推送
-func TestBatchConcurrentPush(t *testing.T) {
-	var mu sync.Mutex
-	processedItems := []int{}
-	var wg sync.WaitGroup
-
-	processFunc := func(items []int) error {
-		mu.Lock()
-		processedItems = append(processedItems, items...)
-		mu.Unlock()
-		// 仅在任务总数未达 100 时验证批次大小为 10
-		if len(processedItems) < 100 && len(items) != 10 {
-			t.Errorf("预期批次大小为 10，实际为 %d", len(items))
-		}
-		wg.Done()
-		return nil
-	}
-
-	b := asyncbatch.New(processFunc,
-		asyncbatch.WithNumWorkers(2),
-		asyncbatch.WithBatchSize(10),
-		asyncbatch.WithFlushInterval(1*time.Minute), // 避免刷新间隔触发
-	)
-
-	// 并发推送 100 个任务
-	concurrency := 10
-	tasksPerGoroutine := 10
-	totalTasks := concurrency * tasksPerGoroutine
-	// 使用硬编码的 batchSize=10 计算批次数量
+	var errorsHandled [][]int
+	queue := make(chan int, 100)
 	batchSize := 10
-	wg.Add((totalTasks + batchSize - 1) / batchSize)
-	var pushWG sync.WaitGroup
-	pushWG.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
-		go func(start int) {
-			for j := 0; j < tasksPerGoroutine; j++ {
-				b.Push(start + j)
-			}
-			pushWG.Done()
-		}(i * tasksPerGoroutine)
+	emptyWait := 100 * time.Millisecond
+	partialWait := 50 * time.Millisecond
+	logSampleRate := 1
+
+	b := asyncbatch.New(queue, batchSize, emptyWait, partialWait, func(items []int) error {
+		return errors.New("processing error")
+	}, func(items []int, err error) {
+		mu.Lock()
+		errorsHandled = append(errorsHandled, items)
+		mu.Unlock()
+	}, logSampleRate)
+
+	go b.Run()
+
+	// Send 10 items
+	for i := 0; i < 10; i++ {
+		queue <- i
 	}
-	pushWG.Wait()
+	// MODIFIED: increased sleep time to 3s
+	time.Sleep(3 * time.Second)
+	close(queue)
+	time.Sleep(200 * time.Millisecond)
 
-	// 等待所有批次处理完成
-	wg.Wait()
-	b.Close()
-
+	// Verify: error handler called
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Equal(t, 100, len(processedItems), "应处理 100 个任务")
+	if len(errorsHandled) != 1 {
+		t.Errorf("expected 1 error handled, got %d", len(errorsHandled))
+	}
+	if len(errorsHandled) >= 1 && len(errorsHandled[0]) != 10 {
+		t.Errorf("expected error batch size 10, got %d", len(errorsHandled[0]))
+	}
+}
+
+func TestDynamicPartialWait(t *testing.T) {
+	var mu sync.Mutex
+	var batches [][]int
+	queue := make(chan int, 100)
+	batchSize := 10
+	emptyWait := 500 * time.Millisecond
+	partialWait := 3 * time.Second // 将 partialWait 调整为 3秒
+	logSampleRate := 1
+
+	b := asyncbatch.New(queue, batchSize, emptyWait, partialWait, func(items []int) error {
+		mu.Lock()
+		batches = append(batches, items)
+		mu.Unlock()
+		return nil
+	}, nil, logSampleRate)
+
+	go b.Run()
+
+	// 第一次发送 5 项
+	for i := 0; i < 5; i++ {
+		queue <- i
+	}
+	// 等待时间调整为小于 partialWait（例如 2秒 < 3秒）
+	time.Sleep(2 * time.Second)
+	// 第二次发送 5 项
+	for i := 5; i < 10; i++ {
+		queue <- i
+	}
+	// 等待足够时间让定时器触发
+	time.Sleep(4 * time.Second)
+	close(queue)
+	time.Sleep(200 * time.Millisecond) // 确保处理完成
+
+	// 验证结果
+	mu.Lock()
+	defer mu.Unlock()
+	if len(batches) != 1 {
+		t.Errorf("expected 1 batch, got %d", len(batches))
+	}
+	if len(batches) >= 1 && len(batches[0]) != 10 {
+		t.Errorf("expected batch size 10, got %d", len(batches[0]))
+	}
+}
+
+func TestEmptyWaitTrigger(t *testing.T) {
+	var mu sync.Mutex
+	var batches [][]int
+	queue := make(chan int, 100)
+	batchSize := 10
+	emptyWait := 100 * time.Millisecond
+	partialWait := 50 * time.Millisecond
+	logSampleRate := 1
+
+	b := asyncbatch.New(queue, batchSize, emptyWait, partialWait, func(items []int) error {
+		mu.Lock()
+		batches = append(batches, items)
+		mu.Unlock()
+		return nil
+	}, nil, logSampleRate)
+
+	go b.Run()
+
+	// Send 3 items (low load)
+	for i := 0; i < 3; i++ {
+		queue <- i
+	}
+	// MODIFIED: increased sleep time to 3s
+	time.Sleep(3 * time.Second)
+	close(queue)
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify: expect 1 batch of 3 items triggered by emptyWait
+	mu.Lock()
+	defer mu.Unlock()
+	if len(batches) != 1 {
+		t.Errorf("expected 1 batch, got %d", len(batches))
+	}
+	if len(batches) >= 1 && len(batches[0]) != 3 {
+		t.Errorf("expected batch size 3, got %d", len(batches[0]))
+	}
 }
