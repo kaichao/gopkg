@@ -2,21 +2,19 @@
 
 English | [中文](README.zh.md)
 
-A general-purpose asynchronous batch processing tool in Go, supporting configurable flush strategies and dynamic wait mechanisms.
+`asyncbatch` is a Go package for asynchronous batch processing, built with generics, allowing users to configure batch size, wait times, and processing logic. It is suitable for high-throughput or low-latency scenarios.
 
 ## Features
 
-- **Automatic Batching**: Automatically processes batches when the batch size or time interval is reached.
-- **Dynamic Partial Wait**: Uses exponentially increasing wait times (`partialWait * (1 << partialCount)`) to accumulate more items when the batch is not full, reducing batch fragmentation.
-- **Generics Support**: Supports any data type via Go generics.
-- **Thread-Safe**: Supports concurrent submission and processing.
-- **Graceful Shutdown**: Ensures all pending items are processed.
-- **Multi-Processing Backends**: Speeds up computation response times.
+- **Generic Support**: Supports tasks of any type with type safety.
+- **Flexible Configuration**: Configure batch processing parameters using `With...` functions.
+- **Dynamic Wait Times**: Adjusts wait times based on batch state (empty, partial, full).
+- **Graceful Shutdown**: Safely exits after processing remaining tasks.
 
-## Typical Use Cases
+## Use Cases
 
 - Batch database operations (insert/update)
-- API request aggregation
+- Aggregating API requests
 - Log/event processing pipelines
 - Queue consumer implementations
 
@@ -29,111 +27,88 @@ go get github.com/kaichao/gopkg/asyncbatch
 ## Quick Start
 
 ```go
-// Define the processing function
-processFunc := func(items []string) error {
-    fmt.Printf("Processing batch: %v", items)
-    return nil
-}
+package main
 
-// Create a Batch with 3 workers, batch size of 5, and 2-second flush interval
-batch := asyncbatch.New[string](
-    processFunc,
-    asyncbatch.WithNumWorkers(3),
-    asyncbatch.WithBatchSize(5),
-    asyncbatch.WithFlushInterval(2*time.Second),
+import (
+    "fmt"
+    "time"
+    "github.com/kaichao/gopkg/asyncbatch"
 )
 
-// Enqueue tasks
-for i := 0; i < 12; i++ {
-    batch.Push(fmt.Sprintf("item-%d", i))
+func main() {
+    // Create a batch processor
+    bp := asyncbatch.NewBatchProcessor[string](
+        asyncbatch.WithMaxSize[string](3),
+        asyncbatch.WithMaxWait[string](time.Second),
+        asyncbatch.WithEmptyWait[string](200*time.Millisecond),
+        asyncbatch.WithPartialWait[string](100*time.Millisecond),
+        asyncbatch.WithWorker[string](func(batch []string) {
+            fmt.Printf("Processing batch: %v\n", batch)
+        }),
+    )
+
+    // Start batch processing
+    go bp.Run()
+
+    // Add tasks
+    bp.Add("task1")
+    bp.Add("task2")
+    bp.Add("task3")
+
+    // Wait for processing
+    time.Sleep(200 * time.Millisecond)
+
+    // Shutdown
+    bp.Shutdown()
 }
-
-// Wait for a period to trigger flushing
-time.Sleep(5 * time.Second)
-
-// Close to process remaining tasks and stop workers
-batch.Close()
 ```
 
-### API Description
+## API
+### Types
+- `BatchProcessor[T any]`: A batch processor using generics, supporting tasks of any type.
+- `Option[T any]`: A configuration function type for setting parameters.
 
-```go
-type Batch[T any] struct {
-    // Push(item) adds a task to the queue
-    Push(item T)
+### Functions
+- **`NewBatchProcessor[T any](opts ...Option[T]) *BatchProcessor[T]`**  
+  Creates a batch processor with the provided configuration options. Defaults: max batch size 100, wait times 1 second.
+- **`WithMaxSize[T any](size int) Option[T]`**  
+  Sets the maximum batch size (effective if >0).
+- **`WithMaxWait[T any](duration time.Duration) Option[T]`**  
+  Sets the maximum wait time for a full batch (effective if >0). Full batches are typically processed immediately; `maxWait` limits the maximum delay for consecutive full batches.
+- **`WithEmptyWait[T any](duration time.Duration) Option[T]`**  
+  Sets the wait time for an empty batch (effective if >0). Empty batches wait for new tasks.
+- **`WithPartialWait[T any](duration time.Duration) Option[T]`**  
+  Sets the wait time for a partial batch (effective if >0). Partial batches wait for more tasks or process on timeout.
+- **`WithWorker[T any](worker func([]T)) Option[T]`**  
+  Sets the batch processing function to handle a batch of tasks.
+- **`(*BatchProcessor[T]) Add(task T) error`**  
+  Adds a task to the batch processor. Returns an error if the processor is closed or the task channel is full.
+- **`(*BatchProcessor[T]) Run()`**  
+  Starts the batch processor to process tasks asynchronously.
+- **`(*BatchProcessor[T]) Shutdown()`**  
+  Shuts down the batch processor, processing remaining tasks before exiting.
+- **`(*BatchProcessor[T]) MaxSize() int`**  
+  Returns the maximum batch size.
+- **`(*BatchProcessor[T]) MaxWait() time.Duration`**  
+  Returns the maximum wait time for a full batch.
+- **`(*BatchProcessor[T]) EmptyWait() time.Duration`**  
+  Returns the wait time for an empty batch.
+- **`(*BatchProcessor[T]) PartialWait() time.Duration`**  
+  Returns the wait time for a partial batch.
+- **`(*BatchProcessor[T]) Worker() func([]T)`**  
+  Returns the batch processing function.
 
-    // Close() closes the queue, processes remaining tasks, and stops all workers
-    Close()
-}
-```
+## Wait Time Mechanism
+`asyncbatch` dynamically controls batch processing triggers using three wait times to optimize throughput and latency:
 
-#### Constructor
+- **`maxWait`**: The maximum wait time for a full batch (task count ≥ `maxSize`).  
+  - **Purpose**: Full batches are processed immediately; `maxWait` limits the maximum delay for consecutive full batches in high-throughput scenarios to prevent task accumulation.  
+  - **Example**: With `maxSize=3`, `maxWait=1s`, three tasks are processed immediately. If tasks arrive continuously, processing occurs at most every 1 second.
+- **`emptyWait`**: The wait time for an empty batch (no tasks).  
+  - **Purpose**: Waits for new tasks during idle periods, reducing resource usage.  
+  - **Example**: With `emptyWait=200ms`, an empty batch checks for new tasks every 200ms.
+- **`partialWait`**: The wait time for a partial batch (task count < `maxSize`).  
+  - **Purpose**: Waits for more tasks or processes on timeout, ideal for low-throughput scenarios.  
+  - **Example**: With `partialWait=100ms`, two tasks wait 100ms before processing, resetting the wait if new tasks arrive.
 
-```go
-func New[T any](
-    processFunc func([]T) error,
-    opts ...Option,
-) *Batch[T]
-```
-
-- **`processFunc`**  
-  Function to process a batch of tasks, receives `[]T` and returns an error. Errors are ignored internally.
-
-- **`opts`**  
-  Optional configuration options (see below).
-
-#### Optional Configuration
-
-- **`WithNumWorkers(n int)`**  
-  Number of concurrent workers. Default: `1`. Minimum: `1`.
-
-- **`WithBatchSize(size int)`**  
-  Maximum number of tasks per batch. Default: `1`. Minimum: `1`.
-
-- **`WithFlushInterval(d time.Duration)`**  
-  Maximum wait time before flushing non-empty batches. Default: `0` (disables timed flushing, only triggers on full batch or Close).
-
-#### Default Parameters
-
-- **Channel Capacity**: `100`
-- **Number of Workers**: `1`
-- **Batch Size**: `1`
-- **Flush Interval**: `0` (only processes on full batch or Close)
-
-## Logging
-
-Workers output logs for startup, batch processing, timed flushing, and shutdown:
-
-```
-worker-12345 started
-worker-12345 processing 5 items
-worker-12345 flushing 2 items
-worker-12345 stopped
-```
-
-Logs use the standard `log.Printf`.
-
-## New Features
-
-Below is a detailed description of the new features:
-
-- **Dynamic Partial Wait Mechanism**:  
-  When a batch does not reach `batchSize`, the system waits with exponentially increasing times (e.g., 50ms, 100ms, 200ms) to allow more tasks to join, reducing unnecessary partial batch processing. This mechanism is particularly suited for scenarios with uneven task arrival rates.  
-  **Example**: In the test `TestPartialBatchWait`, after sending 5 items, the system dynamically waits to accumulate 8 items before processing them as a single batch.
-
-- **Improved Timer Logic**:  
-  When the timer triggers, the system attempts to read more data from the queue until `batchSize` is reached or the queue is empty. This improvement ensures batches are as complete as possible, enhancing processing efficiency.  
-  **Example**: In the test `TestDynamicPartialWait`, after sending 5 items, the system dynamically extends the wait time to accumulate 10 items before processing.
-
-## Test Verification
-
-You can verify the new features with the following commands:
-
-```bash
-go test -timeout 30s -run ^TestPartialBatchWait$ github.com/kaichao/gopkg/asyncbatch
-go test -timeout 30s -run ^TestDynamicPartialWait$ github.com/kaichao/gopkg/asyncbatch
-```
-
-- **Expected Results**:  
-  - `TestPartialBatchWait`: Processes 8 items in 1 batch.  
-  - `TestDynamicPartialWait`: Processes 10 items in 1 batch.
+**Mechanism**: The `Run()` method selects the appropriate wait time based on the batch state (empty, partial, full), dynamically adjusting the timer. Full batches are prioritized, partial batches balance latency and throughput, and empty batches conserve resources. On shutdown, all remaining tasks are processed.

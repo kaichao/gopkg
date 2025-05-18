@@ -9,251 +9,259 @@ import (
 	"github.com/kaichao/gopkg/asyncbatch"
 )
 
-func TestBatch(t *testing.T) {
-	var mu sync.Mutex
-	var batches [][]int
-	queue := make(chan int, 100)
-	batchSize := 10
-	emptyWait := 100 * time.Millisecond
-	partialWait := 50 * time.Millisecond
-	logSampleRate := 1
+func TestBatchProcessor(t *testing.T) {
+	t.Run("CreateWithOptions", func(t *testing.T) {
+		worker := func(batch []string) {}
+		bp := asyncbatch.NewBatchProcessor[string](
+			asyncbatch.WithMaxSize[string](10),
+			asyncbatch.WithMaxWait[string](500*time.Millisecond),
+			asyncbatch.WithEmptyWait[string](200*time.Millisecond),
+			asyncbatch.WithPartialWait[string](300*time.Millisecond),
+			asyncbatch.WithWorker[string](worker),
+		)
+		if bp.MaxSize() != 10 {
+			t.Errorf("expected maxSize 10, got %d", bp.MaxSize())
+		}
+		if bp.MaxWait() != 500*time.Millisecond {
+			t.Errorf("expected maxWait 500ms, got %v", bp.MaxWait())
+		}
+		if bp.EmptyWait() != 200*time.Millisecond {
+			t.Errorf("expected emptyWait 200ms, got %v", bp.EmptyWait())
+		}
+		if bp.PartialWait() != 300*time.Millisecond {
+			t.Errorf("expected partialWait 300ms, got %v", bp.PartialWait())
+		}
+		if bp.Worker() == nil {
+			t.Error("expected worker to be set, got nil")
+		}
+	})
 
-	b := asyncbatch.New(queue, batchSize, emptyWait, partialWait, func(items []int) error {
+	t.Run("AddAndProcessBatch", func(t *testing.T) {
+		var mu sync.Mutex
+		var batches [][]string
+		worker := func(batch []string) {
+			mu.Lock()
+			batches = append(batches, batch)
+			mu.Unlock()
+		}
+		bp := asyncbatch.NewBatchProcessor[string](
+			asyncbatch.WithMaxSize[string](3),
+			asyncbatch.WithMaxWait[string](time.Second),
+			asyncbatch.WithWorker[string](worker),
+		)
+		go bp.Run()
+
+		if err := bp.Add("task1"); err != nil {
+			t.Errorf("Add failed: %v", err)
+		}
+		if err := bp.Add("task2"); err != nil {
+			t.Errorf("Add failed: %v", err)
+		}
+		if err := bp.Add("task3"); err != nil {
+			t.Errorf("Add failed: %v", err)
+		}
+
+		time.Sleep(100 * time.Millisecond)
+		bp.Shutdown()
+
 		mu.Lock()
-		batches = append(batches, items)
-		mu.Unlock()
-		return nil
-	}, nil, logSampleRate)
+		defer mu.Unlock()
+		if len(batches) != 1 {
+			t.Errorf("expected 1 batch, got %d", len(batches))
+		}
+		if len(batches) > 0 && len(batches[0]) != 3 {
+			t.Errorf("expected batch size 3, got %d", len(batches[0]))
+		}
+	})
 
-	go b.Run()
+	t.Run("TimeoutProcessing", func(t *testing.T) {
+		var mu sync.Mutex
+		var batches [][]string
+		worker := func(batch []string) {
+			mu.Lock()
+			batches = append(batches, batch)
+			mu.Unlock()
+		}
+		bp := asyncbatch.NewBatchProcessor[string](
+			asyncbatch.WithMaxSize[string](10),
+			asyncbatch.WithMaxWait[string](time.Second),
+			asyncbatch.WithPartialWait[string](100*time.Millisecond),
+			asyncbatch.WithWorker[string](worker),
+		)
+		go bp.Run()
 
-	// Send items
-	for i := 0; i < 25; i++ {
-		queue <- i
-	}
-	// MODIFIED: increased sleep time to 4s
-	time.Sleep(4 * time.Second)
-	close(queue)
-	time.Sleep(200 * time.Millisecond)
+		bp.Add("task1")
+		bp.Add("task2")
 
-	// Verify results
-	mu.Lock()
-	defer mu.Unlock()
-	if len(batches) != 3 {
-		t.Errorf("expected 3 batches, got %d", len(batches))
-	}
-	if len(batches) >= 1 && len(batches[0]) != 10 {
-		t.Errorf("expected first batch size 10, got %d", len(batches[0]))
-	}
-	if len(batches) >= 2 && len(batches[1]) != 10 {
-		t.Errorf("expected second batch size 10, got %d", len(batches[1]))
-	}
-	if len(batches) >= 3 && len(batches[2]) != 5 {
-		t.Errorf("expected third batch size 5, got %d", len(batches[2]))
-	}
-}
+		time.Sleep(200 * time.Millisecond)
+		bp.Shutdown()
 
-func TestFullBatchImmediateProcessing(t *testing.T) {
-	var mu sync.Mutex
-	var batches [][]int
-	queue := make(chan int, 100)
-	batchSize := 10
-	emptyWait := 500 * time.Millisecond
-	partialWait := 50 * time.Millisecond
-	logSampleRate := 1
-
-	b := asyncbatch.New(queue, batchSize, emptyWait, partialWait, func(items []int) error {
 		mu.Lock()
-		batches = append(batches, items)
-		mu.Unlock()
-		return nil
-	}, nil, logSampleRate)
+		defer mu.Unlock()
+		if len(batches) != 1 {
+			t.Errorf("expected 1 batch, got %d", len(batches))
+		}
+		if len(batches) > 0 && len(batches[0]) != 2 {
+			t.Errorf("expected batch size 2, got %d", len(batches[0]))
+		}
+	})
 
-	go b.Run()
+	t.Run("EmptyWaitProcessing", func(t *testing.T) {
+		var mu sync.Mutex
+		var called bool
+		worker := func(batch []string) {
+			mu.Lock()
+			called = true
+			mu.Unlock()
+		}
+		bp := asyncbatch.NewBatchProcessor[string](
+			asyncbatch.WithMaxSize[string](10),
+			asyncbatch.WithEmptyWait[string](100*time.Millisecond),
+			asyncbatch.WithWorker[string](worker),
+		)
+		go bp.Run()
 
-	// Send 20 items (2 full batches)
-	for i := 0; i < 20; i++ {
-		queue <- i
-	}
-	// MODIFIED: increased sleep time to 3s
-	time.Sleep(3 * time.Second)
-	close(queue)
-	time.Sleep(200 * time.Millisecond)
+		time.Sleep(150 * time.Millisecond)
+		bp.Shutdown()
 
-	// Verify: expect 2 full batches processed immediately
-	mu.Lock()
-	defer mu.Unlock()
-	if len(batches) != 2 {
-		t.Errorf("expected 2 batches, got %d", len(batches))
-	}
-	if len(batches) >= 1 && len(batches[0]) != 10 {
-		t.Errorf("expected first batch size 10, got %d", len(batches[0]))
-	}
-	if len(batches) >= 2 && len(batches[1]) != 10 {
-		t.Errorf("expected second batch size 10, got %d", len(batches[1]))
-	}
-}
-
-func TestPartialBatchWait(t *testing.T) {
-	var mu sync.Mutex
-	var batches [][]int
-	queue := make(chan int, 100)
-	batchSize := 10
-	emptyWait := 500 * time.Millisecond
-	partialWait := 3 * time.Second // 将 partialWait 调整为 3秒
-	logSampleRate := 1
-
-	b := asyncbatch.New(queue, batchSize, emptyWait, partialWait, func(items []int) error {
 		mu.Lock()
-		batches = append(batches, items)
-		mu.Unlock()
-		return nil
-	}, nil, logSampleRate)
+		defer mu.Unlock()
+		if called {
+			t.Error("worker should not be called with empty batch")
+		}
+	})
 
-	go b.Run()
+	t.Run("PartialWaitProcessing", func(t *testing.T) {
+		var mu sync.Mutex
+		var batches [][]string
+		worker := func(batch []string) {
+			mu.Lock()
+			batches = append(batches, batch)
+			mu.Unlock()
+		}
+		bp := asyncbatch.NewBatchProcessor[string](
+			asyncbatch.WithMaxSize[string](10),
+			asyncbatch.WithPartialWait[string](100*time.Millisecond),
+			asyncbatch.WithWorker[string](worker),
+		)
+		go bp.Run()
 
-	// 发送 5 项（部分批次）
-	for i := 0; i < 5; i++ {
-		queue <- i
-	}
-	// 等待时间调整为小于 partialWait（例如 2秒 < 3秒）
-	time.Sleep(2 * time.Second)
-	// 再发送 3 项
-	for i := 5; i < 8; i++ {
-		queue <- i
-	}
-	// 等待足够时间让定时器触发
-	time.Sleep(4 * time.Second)
-	close(queue)
-	time.Sleep(200 * time.Millisecond) // 确保处理完成
+		bp.Add("task1")
+		bp.Add("task2")
 
-	// 验证结果
-	mu.Lock()
-	defer mu.Unlock()
-	if len(batches) != 1 {
-		t.Errorf("expected 1 batch, got %d", len(batches))
-	}
-	if len(batches) >= 1 && len(batches[0]) != 8 {
-		t.Errorf("expected batch size 8, got %d", len(batches[0]))
-	}
-}
-func TestErrorHandling(t *testing.T) {
-	var mu sync.Mutex
-	var errorsHandled [][]int
-	queue := make(chan int, 100)
-	batchSize := 10
-	emptyWait := 100 * time.Millisecond
-	partialWait := 50 * time.Millisecond
-	logSampleRate := 1
+		time.Sleep(150 * time.Millisecond)
+		bp.Shutdown()
 
-	b := asyncbatch.New(queue, batchSize, emptyWait, partialWait, func(items []int) error {
-		return errors.New("processing error")
-	}, func(items []int, err error) {
 		mu.Lock()
-		errorsHandled = append(errorsHandled, items)
-		mu.Unlock()
-	}, logSampleRate)
+		defer mu.Unlock()
+		if len(batches) != 1 {
+			t.Errorf("expected 1 batch, got %d", len(batches))
+		}
+		if len(batches) > 0 && len(batches[0]) != 2 {
+			t.Errorf("expected batch size 2, got %d", len(batches[0]))
+		}
+	})
 
-	go b.Run()
+	t.Run("AddToClosedProcessor", func(t *testing.T) {
+		bp := asyncbatch.NewBatchProcessor[string]()
+		bp.Shutdown()
+		err := bp.Add("task1")
+		if !errors.Is(err, asyncbatch.ErrBatchProcessorClosed) {
+			t.Errorf("expected ErrBatchProcessorClosed, got %v", err)
+		}
+	})
 
-	// Send 10 items
-	for i := 0; i < 10; i++ {
-		queue <- i
-	}
-	// MODIFIED: increased sleep time to 3s
-	time.Sleep(3 * time.Second)
-	close(queue)
-	time.Sleep(200 * time.Millisecond)
+	t.Run("ShutdownWithPendingTasks", func(t *testing.T) {
+		var mu sync.Mutex
+		var batches [][]string
+		worker := func(batch []string) {
+			mu.Lock()
+			batches = append(batches, batch)
+			mu.Unlock()
+		}
+		bp := asyncbatch.NewBatchProcessor[string](
+			asyncbatch.WithMaxSize[string](10),
+			asyncbatch.WithMaxWait[string](time.Second),
+			asyncbatch.WithWorker[string](worker),
+		)
+		go bp.Run()
 
-	// Verify: error handler called
-	mu.Lock()
-	defer mu.Unlock()
-	if len(errorsHandled) != 1 {
-		t.Errorf("expected 1 error handled, got %d", len(errorsHandled))
-	}
-	if len(errorsHandled) >= 1 && len(errorsHandled[0]) != 10 {
-		t.Errorf("expected error batch size 10, got %d", len(errorsHandled[0]))
-	}
-}
+		bp.Add("task1")
+		bp.Add("task2")
+		bp.Shutdown()
 
-func TestDynamicPartialWait(t *testing.T) {
-	var mu sync.Mutex
-	var batches [][]int
-	queue := make(chan int, 100)
-	batchSize := 10
-	emptyWait := 500 * time.Millisecond
-	partialWait := 3 * time.Second // 将 partialWait 调整为 3秒
-	logSampleRate := 1
+		time.Sleep(200 * time.Millisecond)
 
-	b := asyncbatch.New(queue, batchSize, emptyWait, partialWait, func(items []int) error {
 		mu.Lock()
-		batches = append(batches, items)
-		mu.Unlock()
-		return nil
-	}, nil, logSampleRate)
+		defer mu.Unlock()
+		if len(batches) != 1 {
+			t.Errorf("expected 1 batch, got %d", len(batches))
+		}
+		if len(batches) > 0 && len(batches[0]) != 2 {
+			t.Errorf("expected batch size 2, got %d", len(batches[0]))
+		}
+	})
 
-	go b.Run()
+	t.Run("GenericTypeSafety", func(t *testing.T) {
+		var mu sync.Mutex
+		var batches [][]int
+		worker := func(batch []int) {
+			mu.Lock()
+			batches = append(batches, batch)
+			mu.Unlock()
+		}
+		bp := asyncbatch.NewBatchProcessor[int](
+			asyncbatch.WithMaxSize[int](2),
+			asyncbatch.WithWorker[int](worker),
+		)
+		go bp.Run()
 
-	// 第一次发送 5 项
-	for i := 0; i < 5; i++ {
-		queue <- i
-	}
-	// 等待时间调整为小于 partialWait（例如 2秒 < 3秒）
-	time.Sleep(2 * time.Second)
-	// 第二次发送 5 项
-	for i := 5; i < 10; i++ {
-		queue <- i
-	}
-	// 等待足够时间让定时器触发
-	time.Sleep(4 * time.Second)
-	close(queue)
-	time.Sleep(200 * time.Millisecond) // 确保处理完成
+		bp.Add(1)
+		bp.Add(2)
+		time.Sleep(100 * time.Millisecond)
+		bp.Shutdown()
 
-	// 验证结果
-	mu.Lock()
-	defer mu.Unlock()
-	if len(batches) != 1 {
-		t.Errorf("expected 1 batch, got %d", len(batches))
-	}
-	if len(batches) >= 1 && len(batches[0]) != 10 {
-		t.Errorf("expected batch size 10, got %d", len(batches[0]))
-	}
-}
-
-func TestEmptyWaitTrigger(t *testing.T) {
-	var mu sync.Mutex
-	var batches [][]int
-	queue := make(chan int, 100)
-	batchSize := 10
-	emptyWait := 100 * time.Millisecond
-	partialWait := 50 * time.Millisecond
-	logSampleRate := 1
-
-	b := asyncbatch.New(queue, batchSize, emptyWait, partialWait, func(items []int) error {
 		mu.Lock()
-		batches = append(batches, items)
-		mu.Unlock()
-		return nil
-	}, nil, logSampleRate)
+		defer mu.Unlock()
+		if len(batches) != 1 {
+			t.Errorf("expected 1 batch, got %d", len(batches))
+		}
+		if len(batches) > 0 && (len(batches[0]) != 2 || batches[0][0] != 1 || batches[0][1] != 2) {
+			t.Errorf("expected batch [1,2], got %v", batches[0])
+		}
+	})
 
-	go b.Run()
+	t.Run("FullBatchImmediateProcessing", func(t *testing.T) {
+		var mu sync.Mutex
+		var batches [][]string
+		worker := func(batch []string) {
+			mu.Lock()
+			batches = append(batches, batch)
+			mu.Unlock()
+		}
+		bp := asyncbatch.NewBatchProcessor[string](
+			asyncbatch.WithMaxSize[string](2),
+			asyncbatch.WithMaxWait[string](500*time.Millisecond),
+			asyncbatch.WithWorker[string](worker),
+		)
+		go bp.Run()
 
-	// Send 3 items (low load)
-	for i := 0; i < 3; i++ {
-		queue <- i
-	}
-	// MODIFIED: increased sleep time to 3s
-	time.Sleep(3 * time.Second)
-	close(queue)
-	time.Sleep(200 * time.Millisecond)
+		start := time.Now()
+		bp.Add("task1")
+		bp.Add("task2")
+		time.Sleep(50 * time.Millisecond)
+		bp.Shutdown()
 
-	// Verify: expect 1 batch of 3 items triggered by emptyWait
-	mu.Lock()
-	defer mu.Unlock()
-	if len(batches) != 1 {
-		t.Errorf("expected 1 batch, got %d", len(batches))
-	}
-	if len(batches) >= 1 && len(batches[0]) != 3 {
-		t.Errorf("expected batch size 3, got %d", len(batches[0]))
-	}
+		mu.Lock()
+		defer mu.Unlock()
+		if len(batches) != 1 {
+			t.Errorf("expected 1 batch, got %d", len(batches))
+		}
+		if len(batches) > 0 && len(batches[0]) != 2 {
+			t.Errorf("expected batch size 2, got %d", len(batches[0]))
+		}
+		if duration := time.Since(start); duration > 100*time.Millisecond {
+			t.Errorf("full batch processing took too long: %v, expected immediate", duration)
+		}
+	})
 }

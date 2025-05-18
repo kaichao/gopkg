@@ -1,124 +1,199 @@
 package asyncbatch
 
 import (
-	"fmt"
-	"log"
-	"math/rand"
+	"errors"
 	"time"
 )
 
-// Batch ...
-type Batch[T any] struct {
-	q             chan T
-	batchSize     int
-	emptyWait     time.Duration
-	partialWait   time.Duration
-	processFunc   func([]T) error
-	errorHandler  func([]T, error)
-	logSampleRate int
+// Package-level error constants
+var (
+	ErrBatchProcessorClosed = errors.New("batch processor is closed")
+	ErrTaskChannelFull      = errors.New("task channel is full")
+)
+
+// Option defines the configuration function type
+type Option[T any] func(*BatchProcessor[T])
+
+// BatchProcessor is a generic batch processor
+type BatchProcessor[T any] struct {
+	maxSize     int           // Maximum batch size
+	maxWait     time.Duration // Maximum wait time for full batch
+	emptyWait   time.Duration // Wait time for empty batch
+	partialWait time.Duration // Wait time for partial batch
+	worker      func([]T)     // Batch processing function
+	tasks       chan T        // Task channel
+	closed      bool          // Whether the processor is closed
+	stop        chan struct{} // Stop signal
 }
 
-// New ...
-func New[T any](queue chan T, batchSize int, emptyWait, partialWait time.Duration, process func([]T) error, errorHandler func([]T, error), logSampleRate int) *Batch[T] {
-	if errorHandler == nil {
-		errorHandler = func(items []T, err error) {
-			log.Printf("error processing %d items: %v", len(items), err)
+// NewBatchProcessor creates a new batch processor
+func NewBatchProcessor[T any](opts ...Option[T]) *BatchProcessor[T] {
+	bp := &BatchProcessor[T]{
+		maxSize:     100,         // Default max batch size
+		maxWait:     time.Second, // Default full batch wait time
+		emptyWait:   time.Second, // Default empty batch wait time
+		partialWait: time.Second, // Default partial batch wait time
+		tasks:       make(chan T, 100),
+		stop:        make(chan struct{}),
+	}
+	for _, opt := range opts {
+		opt(bp)
+	}
+	return bp
+}
+
+// WithMaxSize sets the maximum batch size
+func WithMaxSize[T any](size int) Option[T] {
+	return func(bp *BatchProcessor[T]) {
+		if size > 0 {
+			bp.maxSize = size
 		}
-	}
-	if logSampleRate <= 0 {
-		logSampleRate = 1
-	}
-	return &Batch[T]{
-		q:             queue,
-		batchSize:     batchSize,
-		emptyWait:     emptyWait,
-		partialWait:   partialWait,
-		processFunc:   process,
-		errorHandler:  errorHandler,
-		logSampleRate: logSampleRate,
 	}
 }
 
-func (b *Batch[T]) Run() {
-	var batch []T
-	timer := time.NewTimer(b.emptyWait)
-	workerID := fmt.Sprintf("worker-%d", rand.Int())
-	if b.logSampleRate == 1 {
-		log.Printf("%s started", workerID)
+// WithMaxWait sets the maximum wait time for a full batch
+func WithMaxWait[T any](duration time.Duration) Option[T] {
+	return func(bp *BatchProcessor[T]) {
+		if duration > 0 {
+			bp.maxWait = duration
+		}
 	}
-	logCounter := 0
+}
 
-	defer func() {
-		if len(batch) > 0 {
-			logCounter++
-			if logCounter%b.logSampleRate == 0 {
-				log.Printf("%s flushing %d items", workerID, len(batch))
-			}
-			if err := b.processFunc(batch); err != nil {
-				b.errorHandler(batch, err)
-			}
+// WithEmptyWait sets the wait time for an empty batch
+func WithEmptyWait[T any](duration time.Duration) Option[T] {
+	return func(bp *BatchProcessor[T]) {
+		if duration > 0 {
+			bp.emptyWait = duration
 		}
-		if b.logSampleRate == 1 {
-			log.Printf("%s stopped", workerID)
+	}
+}
+
+// WithPartialWait sets the wait time for a partial batch
+func WithPartialWait[T any](duration time.Duration) Option[T] {
+	return func(bp *BatchProcessor[T]) {
+		if duration > 0 {
+			bp.partialWait = duration
 		}
-		timer.Stop()
-	}()
+	}
+}
+
+// WithWorker sets the batch processing function
+func WithWorker[T any](worker func([]T)) Option[T] {
+	return func(bp *BatchProcessor[T]) {
+		bp.worker = worker
+	}
+}
+
+// MaxSize returns the maximum batch size
+func (bp *BatchProcessor[T]) MaxSize() int {
+	return bp.maxSize
+}
+
+// MaxWait returns the maximum wait time for a full batch
+func (bp *BatchProcessor[T]) MaxWait() time.Duration {
+	return bp.maxWait
+}
+
+// EmptyWait returns the wait time for an empty batch
+func (bp *BatchProcessor[T]) EmptyWait() time.Duration {
+	return bp.emptyWait
+}
+
+// PartialWait returns the wait time for a partial batch
+func (bp *BatchProcessor[T]) PartialWait() time.Duration {
+	return bp.partialWait
+}
+
+// Worker returns the batch processing function
+func (bp *BatchProcessor[T]) Worker() func([]T) {
+	return bp.worker
+}
+
+// Add adds a task to the batch processor
+func (bp *BatchProcessor[T]) Add(task T) error {
+	if bp.closed {
+		return ErrBatchProcessorClosed
+	}
+	select {
+	case bp.tasks <- task:
+		return nil
+	default:
+		return ErrTaskChannelFull
+	}
+}
+
+// Shutdown closes the batch processor
+func (bp *BatchProcessor[T]) Shutdown() {
+	if !bp.closed {
+		bp.closed = true
+		close(bp.stop)
+	}
+}
+
+// Run starts the batch processor
+func (bp *BatchProcessor[T]) Run() {
+	if bp.worker == nil {
+		return
+	}
+
+	batch := make([]T, 0, bp.maxSize)
+	var timer *time.Timer
+	var waitTime time.Duration
 
 	for {
+		// Select wait time based on batch state
+		if len(batch) == 0 {
+			waitTime = bp.emptyWait
+		} else if len(batch) < bp.maxSize {
+			waitTime = bp.partialWait
+		} else {
+			waitTime = bp.maxWait
+		}
+
+		if timer == nil {
+			timer = time.NewTimer(waitTime)
+			defer timer.Stop()
+		} else {
+			timer.Reset(waitTime)
+		}
+
 		select {
-		case item, ok := <-b.q:
+		case task, ok := <-bp.tasks:
 			if !ok {
-				// 队列关闭，处理剩余项
 				if len(batch) > 0 {
-					logCounter++
-					if logCounter%b.logSampleRate == 0 {
-						log.Printf("%s flushing %d items", workerID, len(batch))
-					}
-					if err := b.processFunc(batch); err != nil {
-						b.errorHandler(batch, err)
-					}
+					bp.worker(batch)
 				}
 				return
 			}
-
-			// 添加到批次
-			batch = append(batch, item)
-
-			// 关键修改点：每次添加新项时，如果未满批次，重置定时器为 partialWait
-			if len(batch) < b.batchSize {
-				// 停止旧定时器并重置为 partialWait
-				if !timer.Stop() {
-					<-timer.C
-				}
-				timer.Reset(b.partialWait)
-			} else {
-				// 批次已满，立即处理
-				logCounter++
-				if logCounter%b.logSampleRate == 0 {
-					log.Printf("%s flushing %d items", workerID, len(batch))
-				}
-				if err := b.processFunc(batch); err != nil {
-					b.errorHandler(batch, err)
-				}
-				batch = batch[:0]
-				// 处理完满批次后，重置定时器为 emptyWait
-				timer.Reset(b.emptyWait)
+			batch = append(batch, task)
+			if len(batch) >= bp.maxSize {
+				// Process full batch immediately
+				bp.worker(batch)
+				batch = make([]T, 0, bp.maxSize)
+				timer.Reset(bp.emptyWait)
 			}
-
 		case <-timer.C:
-			// 定时器触发，处理当前批次（可能为空）
+			// Timeout: process non-empty batch
 			if len(batch) > 0 {
-				logCounter++
-				if logCounter%b.logSampleRate == 0 {
-					log.Printf("%s flushing %d items", workerID, len(batch))
-				}
-				if err := b.processFunc(batch); err != nil {
-					b.errorHandler(batch, err)
-				}
-				batch = batch[:0]
+				bp.worker(batch)
+				batch = make([]T, 0, bp.maxSize)
 			}
-			// 重置定时器为 emptyWait 等待新批次
-			timer.Reset(b.emptyWait)
+			timer.Reset(bp.emptyWait)
+		case <-bp.stop:
+			// Drain tasks channel before exiting
+			close(bp.tasks)
+			for task := range bp.tasks {
+				batch = append(batch, task)
+				if len(batch) >= bp.maxSize {
+					bp.worker(batch)
+					batch = make([]T, 0, bp.maxSize)
+				}
+			}
+			if len(batch) > 0 {
+				bp.worker(batch)
+			}
+			return
 		}
 	}
 }
