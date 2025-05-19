@@ -2,47 +2,31 @@ package asyncbatch
 
 import (
 	"errors"
+	"math"
+	"sync"
 	"time"
 )
 
-// Package-level error constants
-var (
-	ErrBatchProcessorClosed = errors.New("batch processor is closed")
-	ErrTaskChannelFull      = errors.New("task channel is full")
-)
+// BatchProcessor is a generic batch processor for asynchronous task processing.
+type BatchProcessor[T any] struct {
+	maxSize         int
+	upperRatio      float64
+	lowerRatio      float64
+	fixedWait       time.Duration
+	underfilledWait time.Duration
+	numWorkers      int
+	worker          func([]T)
+	tasks           chan T
+	closed          bool
+	stop            chan struct{}
+	wg              sync.WaitGroup
+	closeOnce       sync.Once
+}
 
-// Option defines the configuration function type
+// Option configures BatchProcessor.
 type Option[T any] func(*BatchProcessor[T])
 
-// BatchProcessor is a generic batch processor
-type BatchProcessor[T any] struct {
-	maxSize     int           // Maximum batch size
-	maxWait     time.Duration // Maximum wait time for full batch
-	emptyWait   time.Duration // Wait time for empty batch
-	partialWait time.Duration // Wait time for partial batch
-	worker      func([]T)     // Batch processing function
-	tasks       chan T        // Task channel
-	closed      bool          // Whether the processor is closed
-	stop        chan struct{} // Stop signal
-}
-
-// NewBatchProcessor creates a new batch processor
-func NewBatchProcessor[T any](opts ...Option[T]) *BatchProcessor[T] {
-	bp := &BatchProcessor[T]{
-		maxSize:     100,         // Default max batch size
-		maxWait:     time.Second, // Default full batch wait time
-		emptyWait:   time.Second, // Default empty batch wait time
-		partialWait: time.Second, // Default partial batch wait time
-		tasks:       make(chan T, 100),
-		stop:        make(chan struct{}),
-	}
-	for _, opt := range opts {
-		opt(bp)
-	}
-	return bp
-}
-
-// WithMaxSize sets the maximum batch size
+// WithMaxSize sets the maximum batch size.
 func WithMaxSize[T any](size int) Option[T] {
 	return func(bp *BatchProcessor[T]) {
 		if size > 0 {
@@ -51,111 +35,159 @@ func WithMaxSize[T any](size int) Option[T] {
 	}
 }
 
-// WithMaxWait sets the maximum wait time for a full batch
-func WithMaxWait[T any](duration time.Duration) Option[T] {
+// WithUpperRatio sets the upper ratio for continuous processing.
+func WithUpperRatio[T any](ratio float64) Option[T] {
 	return func(bp *BatchProcessor[T]) {
-		if duration > 0 {
-			bp.maxWait = duration
+		if ratio > 0 && ratio <= 1 {
+			bp.upperRatio = ratio
 		}
 	}
 }
 
-// WithEmptyWait sets the wait time for an empty batch
-func WithEmptyWait[T any](duration time.Duration) Option[T] {
+// WithLowerRatio sets the lower ratio for underfilled waiting.
+func WithLowerRatio[T any](ratio float64) Option[T] {
 	return func(bp *BatchProcessor[T]) {
-		if duration > 0 {
-			bp.emptyWait = duration
+		if ratio > 0 && ratio <= 1 {
+			bp.lowerRatio = ratio
 		}
 	}
 }
 
-// WithPartialWait sets the wait time for a partial batch
-func WithPartialWait[T any](duration time.Duration) Option[T] {
+// WithFixedWait sets the fixed wait time for initial task check.
+func WithFixedWait[T any](duration time.Duration) Option[T] {
 	return func(bp *BatchProcessor[T]) {
 		if duration > 0 {
-			bp.partialWait = duration
+			bp.fixedWait = duration
 		}
 	}
 }
 
-// WithWorker sets the batch processing function
+// WithUnderfilledWait sets the wait time for underfilled batches.
+func WithUnderfilledWait[T any](duration time.Duration) Option[T] {
+	return func(bp *BatchProcessor[T]) {
+		if duration > 0 {
+			bp.underfilledWait = duration
+		}
+	}
+}
+
+// WithNumWorkers sets the number of parallel workers (max 8).
+func WithNumWorkers[T any](numWorkers int) Option[T] {
+	return func(bp *BatchProcessor[T]) {
+		bp.numWorkers = numWorkers
+	}
+}
+
+// WithWorker sets the batch processing function.
 func WithWorker[T any](worker func([]T)) Option[T] {
 	return func(bp *BatchProcessor[T]) {
 		bp.worker = worker
 	}
 }
 
-// MaxSize returns the maximum batch size
-func (bp *BatchProcessor[T]) MaxSize() int {
-	return bp.maxSize
+// NewBatchProcessor creates and starts a batch processor with the given options.
+func NewBatchProcessor[T any](opts ...Option[T]) (*BatchProcessor[T], error) {
+	bp := &BatchProcessor[T]{
+		maxSize:         100,
+		upperRatio:      0.5,
+		lowerRatio:      0.1,
+		fixedWait:       5 * time.Millisecond,  // Reduced for faster processing
+		underfilledWait: 20 * time.Millisecond, // Reduced for faster processing
+		numWorkers:      1,
+		stop:            make(chan struct{}),
+	}
+
+	for _, opt := range opts {
+		opt(bp)
+	}
+
+	if bp.worker == nil {
+		return nil, errors.New("worker function is required")
+	}
+	if bp.numWorkers < 1 || bp.numWorkers > 8 {
+		return nil, errors.New("numWorkers must be between 1 and 8")
+	}
+	if bp.upperRatio <= 0 || bp.upperRatio > 1 {
+		return nil, errors.New("upperRatio must be between 0 and 1")
+	}
+	if bp.lowerRatio <= 0 || bp.lowerRatio > 1 {
+		return nil, errors.New("lowerRatio must be between 0 and 1")
+	}
+	if bp.upperRatio < bp.lowerRatio {
+		return nil, errors.New("upperRatio must be greater than or equal to lowerRatio")
+	}
+	if bp.fixedWait >= bp.underfilledWait {
+		return nil, errors.New("fixedWait must be less than underfilledWait")
+	}
+
+	bufferSize := bp.maxSize * bp.numWorkers * 2
+	if bufferSize < bp.maxSize*2 {
+		bufferSize = bp.maxSize * 2
+	}
+	bp.tasks = make(chan T, bufferSize)
+
+	bp.wg.Add(bp.numWorkers)
+	for i := 0; i < bp.numWorkers; i++ {
+		go func() {
+			defer bp.wg.Done()
+			bp.run()
+		}()
+	}
+
+	return bp, nil
 }
 
-// MaxWait returns the maximum wait time for a full batch
-func (bp *BatchProcessor[T]) MaxWait() time.Duration {
-	return bp.maxWait
-}
-
-// EmptyWait returns the wait time for an empty batch
-func (bp *BatchProcessor[T]) EmptyWait() time.Duration {
-	return bp.emptyWait
-}
-
-// PartialWait returns the wait time for a partial batch
-func (bp *BatchProcessor[T]) PartialWait() time.Duration {
-	return bp.partialWait
-}
-
-// Worker returns the batch processing function
-func (bp *BatchProcessor[T]) Worker() func([]T) {
-	return bp.worker
-}
-
-// Add adds a task to the batch processor
+// Add adds a task to the processor.
 func (bp *BatchProcessor[T]) Add(task T) error {
 	if bp.closed {
-		return ErrBatchProcessorClosed
+		return errors.New("batch processor is closed")
 	}
 	select {
 	case bp.tasks <- task:
 		return nil
 	default:
-		return ErrTaskChannelFull
+		return errors.New("task channel is full")
 	}
 }
 
-// Shutdown closes the batch processor
+// Shutdown stops the processor and processes remaining tasks.
 func (bp *BatchProcessor[T]) Shutdown() {
 	if !bp.closed {
 		bp.closed = true
-		close(bp.stop)
+		close(bp.stop)  // 先关闭 stop 通道
+		bp.wg.Wait()    // 等待所有工作者完成
+		close(bp.tasks) // 最后关闭任务通道
 	}
 }
 
-// Run starts the batch processor
-func (bp *BatchProcessor[T]) Run() {
-	if bp.worker == nil {
-		return
-	}
-
+// run is the internal worker loop for processing batches.
+func (bp *BatchProcessor[T]) run() {
 	batch := make([]T, 0, bp.maxSize)
 	var timer *time.Timer
-	var waitTime time.Duration
+	// upperThreshold := int(math.Max(1, math.Ceil(float64(bp.maxSize)*bp.upperRatio)))
+	lowerThreshold := int(math.Max(1, math.Floor(float64(bp.maxSize)*bp.lowerRatio)))
+
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 
 	for {
-		// Select wait time based on batch state
-		if len(batch) == 0 {
-			waitTime = bp.emptyWait
-		} else if len(batch) < bp.maxSize {
-			waitTime = bp.partialWait
-		} else {
-			waitTime = bp.maxWait
+		if len(batch) >= bp.maxSize {
+			bp.worker(batch)
+			batch = make([]T, 0, bp.maxSize)
+			if timer != nil {
+				timer.Stop()
+				timer = nil
+			}
+			continue
 		}
 
 		if timer == nil {
-			timer = time.NewTimer(waitTime)
-			defer timer.Stop()
+			timer = time.NewTimer(bp.fixedWait)
 		} else {
-			timer.Reset(waitTime)
+			timer.Reset(bp.fixedWait)
 		}
 
 		select {
@@ -167,33 +199,71 @@ func (bp *BatchProcessor[T]) Run() {
 				return
 			}
 			batch = append(batch, task)
-			if len(batch) >= bp.maxSize {
-				// Process full batch immediately
-				bp.worker(batch)
-				batch = make([]T, 0, bp.maxSize)
-				timer.Reset(bp.emptyWait)
-			}
 		case <-timer.C:
-			// Timeout: process non-empty batch
-			if len(batch) > 0 {
+			if len(batch) >= lowerThreshold {
 				bp.worker(batch)
 				batch = make([]T, 0, bp.maxSize)
+				timer.Stop()
+				timer = nil
+				continue
 			}
-			timer.Reset(bp.emptyWait)
-		case <-bp.stop:
-			// Drain tasks channel before exiting
-			close(bp.tasks)
-			for task := range bp.tasks {
+			timer.Reset(bp.underfilledWait)
+			select {
+			case task, ok := <-bp.tasks:
+				if !ok {
+					if len(batch) > 0 {
+						bp.worker(batch)
+					}
+					return
+				}
 				batch = append(batch, task)
-				if len(batch) >= bp.maxSize {
+			case <-timer.C:
+				if len(batch) > 0 {
 					bp.worker(batch)
 					batch = make([]T, 0, bp.maxSize)
+					timer.Stop()
+					timer = nil
 				}
+			case <-bp.stop:
+				if len(batch) > 0 {
+					bp.worker(batch)
+				}
+				return
 			}
+		case <-bp.stop:
 			if len(batch) > 0 {
 				bp.worker(batch)
 			}
 			return
 		}
 	}
+}
+
+// Getter methods
+func (bp *BatchProcessor[T]) MaxSize() int {
+	return bp.maxSize
+}
+
+func (bp *BatchProcessor[T]) UpperRatio() float64 {
+	return bp.upperRatio
+}
+
+func (bp *BatchProcessor[T]) LowerRatio() float64 {
+	return bp.lowerRatio
+}
+
+func (bp *BatchProcessor[T]) FixedWait() time.Duration {
+	return bp.fixedWait
+}
+
+func (bp *BatchProcessor[T]) UnderfilledWait() time.Duration {
+	return bp.underfilledWait
+}
+
+func (bp *BatchProcessor[T]) NumWorkers() int {
+	return bp.numWorkers
+}
+
+func (bp *BatchProcessor[T]) Worker() func([]T) {
+	return bp.worker
 }
