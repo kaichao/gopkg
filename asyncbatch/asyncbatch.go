@@ -156,12 +156,25 @@ func (bp *BatchProcessor[T]) Add(task T) error {
 
 // Shutdown stops the processor and processes remaining tasks.
 func (bp *BatchProcessor[T]) Shutdown() {
-	if !bp.closed {
+	bp.closeOnce.Do(func() {
 		bp.closed = true
-		close(bp.stop)  // 先关闭 stop 通道
-		bp.wg.Wait()    // 等待所有工作者完成
-		close(bp.tasks) // 最后关闭任务通道
-	}
+		close(bp.stop)
+		bp.wg.Wait() // 等待所有 worker 停止
+
+		// 单独处理剩余任务，不涉及 WaitGroup
+		close(bp.tasks)
+		remaining := make([]T, 0, len(bp.tasks))
+		for task := range bp.tasks {
+			remaining = append(remaining, task)
+		}
+		if len(remaining) > 0 {
+			bp.worker(remaining)
+		}
+	})
+}
+
+func (bp *BatchProcessor[T]) TasksCap() int {
+	return cap(bp.tasks)
 }
 
 // run is the internal worker loop for processing batches.
@@ -177,68 +190,86 @@ func (bp *BatchProcessor[T]) run() {
 	}()
 
 	for {
-		if len(batch) >= bp.maxSize {
-			bp.worker(batch)
-			batch = make([]T, 0, bp.maxSize)
-			if timer != nil {
-				timer.Stop()
-				timer = nil
-			}
+		// 优先检查停止信号
+		select {
+		case <-bp.stop:
+			bp.flushBatch(batch)
+			return
+		default:
+		}
+
+		// 阈值检查前置
+		if shouldFlush := len(batch) >= bp.maxSize || len(batch) >= int(float64(bp.maxSize)*bp.upperRatio); shouldFlush {
+			bp.flushBatch(batch)
+			batch, timer = bp.resetBatchAndTimer(batch, timer)
 			continue
 		}
 
-		if timer == nil {
-			timer = time.NewTimer(bp.fixedWait)
-		} else {
-			timer.Reset(bp.fixedWait)
-		}
+		// 初始化定时器
+		timer = bp.initTimer(timer)
 
 		select {
 		case task, ok := <-bp.tasks:
 			if !ok {
-				if len(batch) > 0 {
-					bp.worker(batch)
-				}
+				bp.flushBatch(batch)
 				return
 			}
 			batch = append(batch, task)
+
 		case <-timer.C:
-			if len(batch) >= lowerThreshold {
-				bp.worker(batch)
-				batch = make([]T, 0, bp.maxSize)
-				timer.Stop()
-				timer = nil
-				continue
-			}
-			timer.Reset(bp.underfilledWait)
-			select {
-			case task, ok := <-bp.tasks:
-				if !ok {
-					if len(batch) > 0 {
-						bp.worker(batch)
-					}
-					return
-				}
-				batch = append(batch, task)
-			case <-timer.C:
-				if len(batch) > 0 {
-					bp.worker(batch)
-					batch = make([]T, 0, bp.maxSize)
-					timer.Stop()
-					timer = nil
-				}
-			case <-bp.stop:
-				if len(batch) > 0 {
-					bp.worker(batch)
-				}
-				return
-			}
-		case <-bp.stop:
-			if len(batch) > 0 {
-				bp.worker(batch)
-			}
-			return
+			batch, timer = bp.handleTimerExpired(batch, timer, lowerThreshold)
 		}
+	}
+}
+
+// 辅助函数 1：处理批次提交
+func (bp *BatchProcessor[T]) flushBatch(batch []T) {
+	if len(batch) > 0 {
+		bp.worker(batch)
+	}
+}
+
+// 辅助函数 2：重置批次和定时器
+func (bp *BatchProcessor[T]) resetBatchAndTimer(batch []T, timer *time.Timer) ([]T, *time.Timer) {
+	if timer != nil {
+		timer.Stop()
+	}
+	return make([]T, 0, bp.maxSize), nil
+}
+
+// 辅助函数 3：初始化定时器
+func (bp *BatchProcessor[T]) initTimer(timer *time.Timer) *time.Timer {
+	if timer == nil {
+		return time.NewTimer(bp.fixedWait)
+	}
+	timer.Reset(bp.fixedWait)
+	return timer
+}
+
+// 辅助函数 4：处理定时器到期
+func (bp *BatchProcessor[T]) handleTimerExpired(batch []T, timer *time.Timer, lowerThreshold int) ([]T, *time.Timer) {
+	if len(batch) >= lowerThreshold {
+		bp.flushBatch(batch)
+		return bp.resetBatchAndTimer(batch, timer)
+	}
+
+	// 启动二次等待
+	timer.Reset(bp.underfilledWait)
+	select {
+	case task, ok := <-bp.tasks:
+		if !ok {
+			bp.flushBatch(batch)
+			return batch, timer
+		}
+		return append(batch, task), timer
+
+	case <-timer.C:
+		bp.flushBatch(batch)
+		return bp.resetBatchAndTimer(batch, timer)
+
+	case <-bp.stop:
+		bp.flushBatch(batch)
+		return batch, timer
 	}
 }
 
