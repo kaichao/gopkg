@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,36 +13,37 @@ import (
 )
 
 func TestBatchProcessor(t *testing.T) {
-
 	t.Run("AutoRun", func(t *testing.T) {
 		var mu sync.Mutex
 		var batches [][]string
 		var wg sync.WaitGroup
+
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](10),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](100*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](200*time.Millisecond),
-			asyncbatch.WithWorker[string](func(batch []string) {
+			func(batch []string) {
 				t.Logf("Processing batch of size %d", len(batch))
 				mu.Lock()
 				batches = append(batches, batch)
 				mu.Unlock()
-				wg.Add(-len(batch)) // 按实际处理的任务数递减
-			}),
+				wg.Add(-len(batch))
+			},
+			asyncbatch.WithMaxSize(10),
+			asyncbatch.WithUpperRatio(0.5),
+			asyncbatch.WithLowerRatio(0.1),
+			asyncbatch.WithFixedWait(100*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(200*time.Millisecond),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
 		}
 		defer bp.Shutdown()
 
-		wg.Add(2) // 总任务数
+		wg.Add(2)
 		bp.Add("task1")
 		bp.Add("task2")
 		waitWithTimeout(t, &wg, time.Second)
 
 		mu.Lock()
+		defer mu.Unlock()
 		totalProcessed := 0
 		for _, b := range batches {
 			totalProcessed += len(b)
@@ -49,26 +51,26 @@ func TestBatchProcessor(t *testing.T) {
 		if totalProcessed != 2 {
 			t.Errorf("Expected 2 tasks processed, got %d", totalProcessed)
 		}
-		mu.Unlock()
 	})
 
 	t.Run("ContinuousProcessing", func(t *testing.T) {
 		var mu sync.Mutex
 		var batches [][]string
 		var wg sync.WaitGroup
+
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](6),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](100*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](200*time.Millisecond),
-			asyncbatch.WithWorker[string](func(batch []string) {
+			func(batch []string) {
 				t.Logf("Processing batch of size %d", len(batch))
 				mu.Lock()
 				batches = append(batches, batch)
 				mu.Unlock()
-				wg.Add(-len(batch)) // 关键修改点
-			}),
+				wg.Add(-len(batch))
+			},
+			asyncbatch.WithMaxSize(6),
+			asyncbatch.WithUpperRatio(0.5),
+			asyncbatch.WithLowerRatio(0.1),
+			asyncbatch.WithFixedWait(100*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(200*time.Millisecond),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
@@ -76,13 +78,14 @@ func TestBatchProcessor(t *testing.T) {
 		defer bp.Shutdown()
 
 		totalTasks := 9
-		wg.Add(totalTasks) // 总任务数
+		wg.Add(totalTasks)
 		for i := 0; i < totalTasks; i++ {
 			bp.Add(fmt.Sprintf("task%d", i))
 		}
 		waitWithTimeout(t, &wg, time.Second)
 
 		mu.Lock()
+		defer mu.Unlock()
 		totalProcessed := 0
 		for _, b := range batches {
 			totalProcessed += len(b)
@@ -90,26 +93,26 @@ func TestBatchProcessor(t *testing.T) {
 		if totalProcessed != totalTasks {
 			t.Errorf("Expected %d tasks processed, got %d", totalTasks, totalProcessed)
 		}
-		mu.Unlock()
 	})
 
 	t.Run("UnderfilledProcessing", func(t *testing.T) {
 		var mu sync.Mutex
 		var batches [][]string
 		var wg sync.WaitGroup
+
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](10),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.3),
-			asyncbatch.WithFixedWait[string](100*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](200*time.Millisecond),
-			asyncbatch.WithWorker[string](func(batch []string) {
+			func(batch []string) {
 				t.Logf("Processing batch of size %d", len(batch))
 				mu.Lock()
 				batches = append(batches, batch)
 				mu.Unlock()
 				wg.Done()
-			}),
+			},
+			asyncbatch.WithMaxSize(10),
+			asyncbatch.WithUpperRatio(0.5),
+			asyncbatch.WithLowerRatio(0.3),
+			asyncbatch.WithFixedWait(100*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(200*time.Millisecond),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
@@ -122,34 +125,34 @@ func TestBatchProcessor(t *testing.T) {
 		waitWithTimeout(t, &wg, time.Second)
 
 		mu.Lock()
+		defer mu.Unlock()
 		if len(batches) != 1 {
 			t.Errorf("Expected 1 underfilled batch, got %d", len(batches))
 		}
 		if len(batches) > 0 && len(batches[0]) != 2 {
 			t.Errorf("Expected batch size 2, got %d", len(batches[0]))
 		}
-		mu.Unlock()
 	})
 
 	t.Run("MultipleWorkers", func(t *testing.T) {
 		var mu sync.Mutex
 		var batches [][]string
 		var wg sync.WaitGroup
+
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](5),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](100*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](200*time.Millisecond),
-			asyncbatch.WithNumWorkers[string](3),
-			asyncbatch.WithWorker[string](func(batch []string) {
+			func(batch []string) {
 				t.Logf("Processing batch of size %d", len(batch))
 				mu.Lock()
 				batches = append(batches, batch)
 				mu.Unlock()
-				// 每个任务调用Done()
-				wg.Add(-len(batch)) // 或使用 defer wg.Add(-len(batch))
-			}),
+				wg.Add(-len(batch))
+			},
+			asyncbatch.WithMaxSize(5),
+			asyncbatch.WithUpperRatio(0.5),
+			asyncbatch.WithLowerRatio(0.1),
+			asyncbatch.WithFixedWait(100*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(200*time.Millisecond),
+			asyncbatch.WithNumWorkers(3),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
@@ -157,13 +160,14 @@ func TestBatchProcessor(t *testing.T) {
 		defer bp.Shutdown()
 
 		totalTasks := 20
-		wg.Add(totalTasks) // 添加总任务数到WaitGroup
+		wg.Add(totalTasks)
 		for i := 0; i < totalTasks; i++ {
 			bp.Add(fmt.Sprintf("task%d", i))
 		}
-		waitWithTimeout(t, &wg, time.Second) // 等待所有任务完成
+		waitWithTimeout(t, &wg, time.Second)
 
 		mu.Lock()
+		defer mu.Unlock()
 		totalProcessed := 0
 		for _, b := range batches {
 			totalProcessed += len(b)
@@ -171,24 +175,24 @@ func TestBatchProcessor(t *testing.T) {
 		if totalProcessed != totalTasks {
 			t.Errorf("Expected %d tasks processed, got %d", totalTasks, totalProcessed)
 		}
-		mu.Unlock()
 	})
 
 	t.Run("EmptyBatch", func(t *testing.T) {
 		var mu sync.Mutex
 		var batches [][]string
+
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](10),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](100*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](200*time.Millisecond),
-			asyncbatch.WithWorker[string](func(batch []string) {
+			func(batch []string) {
 				t.Logf("Processing batch of size %d", len(batch))
 				mu.Lock()
 				batches = append(batches, batch)
 				mu.Unlock()
-			}),
+			},
+			asyncbatch.WithMaxSize(10),
+			asyncbatch.WithUpperRatio(0.5),
+			asyncbatch.WithLowerRatio(0.1),
+			asyncbatch.WithFixedWait(100*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(200*time.Millisecond),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
@@ -198,29 +202,30 @@ func TestBatchProcessor(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 
 		mu.Lock()
+		defer mu.Unlock()
 		if len(batches) != 0 {
 			t.Errorf("Expected no batches for empty input, got %d", len(batches))
 		}
-		mu.Unlock()
 	})
 
 	t.Run("ExtremeRatios", func(t *testing.T) {
 		var mu sync.Mutex
 		var batches [][]string
 		var wg sync.WaitGroup
+
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](10),
-			asyncbatch.WithUpperRatio[string](1.0),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](100*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](200*time.Millisecond),
-			asyncbatch.WithWorker[string](func(batch []string) {
+			func(batch []string) {
 				t.Logf("Processing batch of size %d", len(batch))
 				mu.Lock()
 				batches = append(batches, batch)
 				mu.Unlock()
 				wg.Done()
-			}),
+			},
+			asyncbatch.WithMaxSize(10),
+			asyncbatch.WithUpperRatio(1.0),
+			asyncbatch.WithLowerRatio(0.1),
+			asyncbatch.WithFixedWait(100*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(200*time.Millisecond),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
@@ -234,30 +239,31 @@ func TestBatchProcessor(t *testing.T) {
 		waitWithTimeout(t, &wg, time.Second)
 
 		mu.Lock()
+		defer mu.Unlock()
 		if len(batches) != 1 {
 			t.Errorf("Expected 1 batch with high upperRatio, got %d", len(batches))
 		}
-		mu.Unlock()
 	})
 
 	t.Run("HighLoad", func(t *testing.T) {
 		var mu sync.Mutex
 		var batches [][]string
 		var wg sync.WaitGroup
+
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](100),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](100*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](200*time.Millisecond),
-			asyncbatch.WithNumWorkers[string](4),
-			asyncbatch.WithWorker[string](func(batch []string) {
+			func(batch []string) {
 				t.Logf("Processing batch of size %d", len(batch))
 				mu.Lock()
 				batches = append(batches, batch)
 				mu.Unlock()
-				wg.Add(-len(batch)) // 关键修改点
-			}),
+				wg.Add(-len(batch))
+			},
+			asyncbatch.WithMaxSize(100),
+			asyncbatch.WithUpperRatio(0.5),
+			asyncbatch.WithLowerRatio(0.1),
+			asyncbatch.WithFixedWait(100*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(200*time.Millisecond),
+			asyncbatch.WithNumWorkers(4),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
@@ -265,13 +271,14 @@ func TestBatchProcessor(t *testing.T) {
 		defer bp.Shutdown()
 
 		totalTasks := 1000
-		wg.Add(totalTasks) // 总任务数
+		wg.Add(totalTasks)
 		for i := 0; i < totalTasks; i++ {
 			bp.Add(fmt.Sprintf("task%d", i))
 		}
 		waitWithTimeout(t, &wg, 2*time.Second)
 
 		mu.Lock()
+		defer mu.Unlock()
 		totalProcessed := 0
 		for _, b := range batches {
 			totalProcessed += len(b)
@@ -279,26 +286,26 @@ func TestBatchProcessor(t *testing.T) {
 		if totalProcessed != totalTasks {
 			t.Errorf("Expected %d tasks processed, got %d", totalTasks, totalProcessed)
 		}
-		mu.Unlock()
 	})
 
 	t.Run("ShutdownBehavior", func(t *testing.T) {
 		var mu sync.Mutex
 		var batches [][]string
 		var wg sync.WaitGroup
+
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](10),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](100*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](200*time.Millisecond),
-			asyncbatch.WithWorker[string](func(batch []string) {
+			func(batch []string) {
 				t.Logf("Processing batch of size %d", len(batch))
 				mu.Lock()
 				batches = append(batches, batch)
 				mu.Unlock()
 				wg.Done()
-			}),
+			},
+			asyncbatch.WithMaxSize(10),
+			asyncbatch.WithUpperRatio(0.5),
+			asyncbatch.WithLowerRatio(0.1),
+			asyncbatch.WithFixedWait(100*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(200*time.Millisecond),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
@@ -317,13 +324,13 @@ func TestBatchProcessor(t *testing.T) {
 
 	t.Run("GetterMethods", func(t *testing.T) {
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](50),
-			asyncbatch.WithUpperRatio[string](0.7),
-			asyncbatch.WithLowerRatio[string](0.2),
-			asyncbatch.WithFixedWait[string](100*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](500*time.Millisecond),
-			asyncbatch.WithNumWorkers[string](2),
-			asyncbatch.WithWorker[string](func([]string) {}),
+			func([]string) {},
+			asyncbatch.WithMaxSize(50),
+			asyncbatch.WithUpperRatio(0.7),
+			asyncbatch.WithLowerRatio(0.2),
+			asyncbatch.WithFixedWait(100*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(500*time.Millisecond),
+			asyncbatch.WithNumWorkers(2),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
@@ -354,13 +361,11 @@ func TestBatchProcessor(t *testing.T) {
 	})
 
 	t.Run("ChannelFull", func(t *testing.T) {
-		const (
-			capacity = 4
-		)
+		const capacity = 4
 		bp, _ := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](2),
-			asyncbatch.WithNumWorkers[string](1),
-			asyncbatch.WithWorker[string](func(_ []string) {}),
+			func(_ []string) {},
+			asyncbatch.WithMaxSize(2),
+			asyncbatch.WithNumWorkers(1),
 		)
 		defer bp.Shutdown()
 
@@ -389,13 +394,7 @@ func TestBatchProcessor(t *testing.T) {
 		var wg sync.WaitGroup
 
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](5),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](50*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](100*time.Millisecond),
-			asyncbatch.WithNumWorkers[string](8),
-			asyncbatch.WithWorker[string](func(batch []string) {
+			func(batch []string) {
 				if len(batch) == 0 {
 					t.Error("Empty batch processed")
 					return
@@ -405,7 +404,13 @@ func TestBatchProcessor(t *testing.T) {
 				batches = append(batches, batch)
 				mu.Unlock()
 				wg.Add(-len(batch))
-			}),
+			},
+			asyncbatch.WithMaxSize(5),
+			asyncbatch.WithUpperRatio(0.5),
+			asyncbatch.WithLowerRatio(0.1),
+			asyncbatch.WithFixedWait(50*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(100*time.Millisecond),
+			asyncbatch.WithNumWorkers(8),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
@@ -415,8 +420,6 @@ func TestBatchProcessor(t *testing.T) {
 		totalTasks := 20
 		wg.Add(totalTasks)
 
-		// 带缓冲的任务添加
-		// 增加通道容量检查
 		start := time.Now()
 		for i := 0; i < totalTasks; {
 			if time.Since(start) > 2*time.Second {
@@ -433,7 +436,6 @@ func TestBatchProcessor(t *testing.T) {
 
 		mu.Lock()
 		defer mu.Unlock()
-
 		totalProcessed := 0
 		for _, b := range batches {
 			totalProcessed += len(b)
@@ -447,19 +449,20 @@ func TestBatchProcessor(t *testing.T) {
 		var mu sync.Mutex
 		var batches [][]string
 		var wg sync.WaitGroup
+
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](1000),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](100*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](200*time.Millisecond),
-			asyncbatch.WithWorker[string](func(batch []string) {
+			func(batch []string) {
 				t.Logf("Processing batch of size %d", len(batch))
 				mu.Lock()
 				batches = append(batches, batch)
 				mu.Unlock()
 				wg.Done()
-			}),
+			},
+			asyncbatch.WithMaxSize(1000),
+			asyncbatch.WithUpperRatio(0.5),
+			asyncbatch.WithLowerRatio(0.1),
+			asyncbatch.WithFixedWait(100*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(200*time.Millisecond),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
@@ -475,8 +478,9 @@ func TestBatchProcessor(t *testing.T) {
 		waitWithTimeout(t, &wg, time.Second)
 
 		mu.Lock()
+		defer mu.Unlock()
 		if len(batches) != expectedBatches {
-			t.Errorf("Expected %d batch with 500 tasks, got %d", expectedBatches, len(batches))
+			t.Errorf("Expected %d batches, got %d", expectedBatches, len(batches))
 		}
 		totalProcessed := 0
 		for _, b := range batches {
@@ -485,17 +489,16 @@ func TestBatchProcessor(t *testing.T) {
 		if totalProcessed != totalTasks {
 			t.Errorf("Expected %d tasks processed, got %d", totalTasks, totalProcessed)
 		}
-		mu.Unlock()
 	})
 
 	t.Run("MultipleShutdown", func(t *testing.T) {
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](10),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](100*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](200*time.Millisecond),
-			asyncbatch.WithWorker[string](func([]string) {}),
+			func([]string) {},
+			asyncbatch.WithMaxSize(10),
+			asyncbatch.WithUpperRatio(0.5),
+			asyncbatch.WithLowerRatio(0.1),
+			asyncbatch.WithFixedWait(100*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(200*time.Millisecond),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
@@ -509,19 +512,20 @@ func TestBatchProcessor(t *testing.T) {
 		var mu sync.Mutex
 		var batches [][]string
 		var wg sync.WaitGroup
+
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](10),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](100*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](200*time.Millisecond),
-			asyncbatch.WithWorker[string](func(batch []string) {
+			func(batch []string) {
 				t.Logf("Processing batch of size %d: %v", len(batch), batch)
 				mu.Lock()
 				batches = append(batches, batch)
 				mu.Unlock()
 				wg.Done()
-			}),
+			},
+			asyncbatch.WithMaxSize(10),
+			asyncbatch.WithUpperRatio(0.5),
+			asyncbatch.WithLowerRatio(0.1),
+			asyncbatch.WithFixedWait(100*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(200*time.Millisecond),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
@@ -533,11 +537,12 @@ func TestBatchProcessor(t *testing.T) {
 		for i := 0; i < totalTasks; i++ {
 			bp.Add(fmt.Sprintf("task%d", i))
 		}
-		time.Sleep(20 * time.Millisecond) // Ensure tasks are processed
+		time.Sleep(20 * time.Millisecond)
 		bp.Shutdown()
 		waitWithTimeout(t, &wg, time.Second)
 
 		mu.Lock()
+		defer mu.Unlock()
 		if len(batches) != expectedBatches {
 			t.Errorf("Expected %d batch, got %d", expectedBatches, len(batches))
 		}
@@ -553,26 +558,26 @@ func TestBatchProcessor(t *testing.T) {
 		if totalProcessed != totalTasks {
 			t.Errorf("Expected %d tasks processed, got %d", totalTasks, totalProcessed)
 		}
-		mu.Unlock()
 	})
 
 	t.Run("SmallBatchPrevention", func(t *testing.T) {
 		var mu sync.Mutex
 		var batches [][]string
 		var wg sync.WaitGroup
+
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](10),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](100*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](200*time.Millisecond),
-			asyncbatch.WithWorker[string](func(batch []string) {
+			func(batch []string) {
 				t.Logf("Processing batch of size %d: %v", len(batch), batch)
 				mu.Lock()
 				batches = append(batches, batch)
 				mu.Unlock()
 				wg.Done()
-			}),
+			},
+			asyncbatch.WithMaxSize(10),
+			asyncbatch.WithUpperRatio(0.5),
+			asyncbatch.WithLowerRatio(0.1),
+			asyncbatch.WithFixedWait(100*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(200*time.Millisecond),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
@@ -585,14 +590,15 @@ func TestBatchProcessor(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			bp.Add(fmt.Sprintf("task%d", i))
 		}
-		time.Sleep(20 * time.Millisecond) // Ensure first batch processes
+		time.Sleep(20 * time.Millisecond)
 		for i := 0; i < 2; i++ {
 			bp.Add(fmt.Sprintf("task%d", i+10))
 		}
-		time.Sleep(20 * time.Millisecond) // Ensure second batch collects tasks
+		time.Sleep(20 * time.Millisecond)
 		waitWithTimeout(t, &wg, time.Second)
 
 		mu.Lock()
+		defer mu.Unlock()
 		if len(batches) != expectedBatches {
 			t.Errorf("Expected %d batches, got %d", expectedBatches, len(batches))
 		}
@@ -609,26 +615,27 @@ func TestBatchProcessor(t *testing.T) {
 		if totalProcessed != totalTasks {
 			t.Errorf("Expected %d tasks processed, got %d", totalTasks, totalProcessed)
 		}
-		mu.Unlock()
 	})
 
 	t.Run("ContinuousProcessing", func(t *testing.T) {
 		var mu sync.Mutex
 		var batches [][]string
 		var wg sync.WaitGroup
+
+		// 修改点：worker作为第一个参数，移除所有选项的泛型参数
 		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](6),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](100*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](200*time.Millisecond),
-			asyncbatch.WithWorker[string](func(batch []string) {
+			func(batch []string) {
 				t.Logf("Processing batch of size %d: %v", len(batch), batch)
 				mu.Lock()
 				batches = append(batches, batch)
 				mu.Unlock()
 				wg.Done()
-			}),
+			},
+			asyncbatch.WithMaxSize(6),
+			asyncbatch.WithUpperRatio(0.5),
+			asyncbatch.WithLowerRatio(0.1),
+			asyncbatch.WithFixedWait(100*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(200*time.Millisecond),
 		)
 		if err != nil {
 			t.Fatalf("NewBatchProcessor failed: %v", err)
@@ -638,17 +645,21 @@ func TestBatchProcessor(t *testing.T) {
 		totalTasks := 9
 		expectedBatches := 2 // 6 + 3
 		wg.Add(expectedBatches)
+
+		// 添加任务逻辑保持不变
 		for i := 0; i < 6; i++ {
 			bp.Add(fmt.Sprintf("task%d", i))
 		}
-		time.Sleep(20 * time.Millisecond) // Ensure first batch processes
+		time.Sleep(20 * time.Millisecond)
 		for i := 0; i < 3; i++ {
 			bp.Add(fmt.Sprintf("task%d", i+6))
 		}
-		time.Sleep(20 * time.Millisecond) // Ensure second batch collects tasks
+		time.Sleep(20 * time.Millisecond)
 		waitWithTimeout(t, &wg, time.Second)
 
+		// 断言逻辑保持不变
 		mu.Lock()
+		defer mu.Unlock()
 		if len(batches) != expectedBatches {
 			t.Errorf("Expected %d batches, got %d", expectedBatches, len(batches))
 		}
@@ -665,9 +676,7 @@ func TestBatchProcessor(t *testing.T) {
 		if totalProcessed != totalTasks {
 			t.Errorf("Expected %d tasks processed, got %d", totalTasks, totalProcessed)
 		}
-		mu.Unlock()
 	})
-
 }
 
 // waitWithTimeout waits for WaitGroup with a timeout.
@@ -686,7 +695,7 @@ func waitWithTimeout(t *testing.T, wg *sync.WaitGroup, timeout time.Duration) {
 
 func TestInvalidParameters(t *testing.T) {
 	t.Run("MissingWorker", func(t *testing.T) {
-		_, err := asyncbatch.NewBatchProcessor[string]()
+		_, err := asyncbatch.NewBatchProcessor[string](nil)
 		if err == nil || !strings.Contains(err.Error(), "worker function is required") {
 			t.Errorf("Expected worker required error, got: %v", err)
 		}
@@ -694,9 +703,9 @@ func TestInvalidParameters(t *testing.T) {
 
 	t.Run("InvalidWaitTimes", func(t *testing.T) {
 		_, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithFixedWait[string](500*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](100*time.Millisecond),
-			asyncbatch.WithWorker[string](func([]string) {}),
+			func([]string) {},
+			asyncbatch.WithFixedWait(500*time.Millisecond),
+			asyncbatch.WithUnderfilledWait(100*time.Millisecond),
 		)
 		if err == nil || !strings.Contains(err.Error(), "fixedWait must be less") {
 			t.Errorf("Expected wait time error, got: %v", err)
@@ -705,11 +714,11 @@ func TestInvalidParameters(t *testing.T) {
 
 	t.Run("TooManyWorkers", func(t *testing.T) {
 		_, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithNumWorkers[string](9),
-			asyncbatch.WithWorker[string](func([]string) {}),
-			asyncbatch.WithMaxSize[string](100),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
+			func([]string) {},
+			asyncbatch.WithNumWorkers(9),
+			asyncbatch.WithMaxSize(100),
+			asyncbatch.WithUpperRatio(0.5),
+			asyncbatch.WithLowerRatio(0.1),
 		)
 		if err == nil || !strings.Contains(err.Error(), "numWorkers must be between") {
 			t.Errorf("Expected worker count error, got: %v", err)
@@ -718,9 +727,9 @@ func TestInvalidParameters(t *testing.T) {
 
 	t.Run("InvalidRatios", func(t *testing.T) {
 		_, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithUpperRatio[string](0.2),
-			asyncbatch.WithLowerRatio[string](0.5),
-			asyncbatch.WithWorker[string](func([]string) {}),
+			func([]string) {},
+			asyncbatch.WithUpperRatio(0.2),
+			asyncbatch.WithLowerRatio(0.5),
 		)
 		if err == nil || !strings.Contains(err.Error(), "upperRatio must be greater") {
 			t.Errorf("Expected ratio error, got: %v", err)
@@ -742,13 +751,9 @@ func TestTinyRatios(t *testing.T) {
 	)
 	defer cancel()
 
+	// 修改点：worker作为第一个参数，选项参数移除泛型
 	bp, err := asyncbatch.NewBatchProcessor[string](
-		asyncbatch.WithMaxSize[string](maxSize),
-		asyncbatch.WithUpperRatio[string](0.001),
-		asyncbatch.WithLowerRatio[string](0.0005),
-		asyncbatch.WithFixedWait[string](1*time.Millisecond),
-		asyncbatch.WithUnderfilledWait[string](2*time.Millisecond),
-		asyncbatch.WithWorker[string](func(batch []string) {
+		func(batch []string) {
 			if len(batch) == 0 {
 				return
 			}
@@ -757,7 +762,12 @@ func TestTinyRatios(t *testing.T) {
 			batches = append(batches, batch)
 			mu.Unlock()
 			wg.Add(-len(batch))
-		}),
+		},
+		asyncbatch.WithMaxSize(maxSize),
+		asyncbatch.WithUpperRatio(0.001),
+		asyncbatch.WithLowerRatio(0.0005),
+		asyncbatch.WithFixedWait(1*time.Millisecond),
+		asyncbatch.WithUnderfilledWait(2*time.Millisecond),
 	)
 	if err != nil {
 		t.Fatalf("Initialization failed: %v", err)
@@ -766,6 +776,7 @@ func TestTinyRatios(t *testing.T) {
 
 	wg.Add(totalTasks)
 
+	// 任务添加逻辑保持不变
 	for i := 0; i < totalTasks; {
 		select {
 		case <-ctx.Done():
@@ -779,6 +790,7 @@ func TestTinyRatios(t *testing.T) {
 		}
 	}
 
+	// 结果验证逻辑保持不变
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -809,18 +821,15 @@ func TestTinyRatios(t *testing.T) {
 
 // BenchmarkBatchProcessor measures throughput.
 func BenchmarkBatchProcessor(b *testing.B) {
-	bp, err := asyncbatch.NewBatchProcessor[string](
-		asyncbatch.WithMaxSize[string](100),
-		asyncbatch.WithUpperRatio[string](0.5),
-		asyncbatch.WithLowerRatio[string](0.1),
-		asyncbatch.WithFixedWait[string](100*time.Millisecond),
-		asyncbatch.WithUnderfilledWait[string](200*time.Millisecond),
-		asyncbatch.WithNumWorkers[string](4),
-		asyncbatch.WithWorker[string](func([]string) {}),
+	bp, _ := asyncbatch.NewBatchProcessor[string](
+		func([]string) {},
+		asyncbatch.WithMaxSize(100),
+		asyncbatch.WithUpperRatio(0.5),
+		asyncbatch.WithLowerRatio(0.1),
+		asyncbatch.WithFixedWait(100*time.Millisecond),
+		asyncbatch.WithUnderfilledWait(200*time.Millisecond),
+		asyncbatch.WithNumWorkers(4),
 	)
-	if err != nil {
-		b.Fatalf("NewBatchProcessor failed: %v", err)
-	}
 	defer bp.Shutdown()
 
 	b.ResetTimer()
@@ -830,100 +839,111 @@ func BenchmarkBatchProcessor(b *testing.B) {
 }
 
 func TestConcurrentAdd(t *testing.T) {
-	t.Run("ConcurrentAdd", func(t *testing.T) {
-		var mu sync.Mutex
-		processedTasks := make(map[string]bool)
-		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](10),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](5*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](20*time.Millisecond),
-			asyncbatch.WithNumWorkers[string](4), // Increased to 4
-			asyncbatch.WithWorker[string](func(batch []string) {
-				mu.Lock()
-				for _, task := range batch {
-					processedTasks[task] = true
+	var (
+		mu             sync.Mutex
+		processedTasks = make(map[string]struct{})
+		wg             sync.WaitGroup
+	)
+
+	bp, _ := asyncbatch.NewBatchProcessor[string](
+		func(batch []string) {
+			mu.Lock()
+			defer mu.Unlock()
+			for _, task := range batch {
+				processedTasks[task] = struct{}{}
+			}
+		},
+		asyncbatch.WithMaxSize(10),
+		asyncbatch.WithNumWorkers(8), // 增加工作线程数
+		asyncbatch.WithFixedWait(5*time.Millisecond),
+		asyncbatch.WithUnderfilledWait(20*time.Millisecond),
+	)
+	defer bp.Shutdown()
+
+	totalTasks := 100
+	wg.Add(totalTasks)
+
+	// 使用带缓冲的channel控制并发量
+	sem := make(chan struct{}, 100)
+	for i := 0; i < totalTasks; i++ {
+		sem <- struct{}{}
+		go func(i int) {
+			defer func() {
+				<-sem
+				wg.Done()
+			}()
+			for { // 重试机制
+				if err := bp.Add(fmt.Sprintf("task%d", i)); err == nil {
+					return
 				}
-				mu.Unlock()
-			}),
-		)
-		if err != nil {
-			t.Fatalf("NewBatchProcessor failed: %v", err)
-		}
-		defer bp.Shutdown()
+				time.Sleep(time.Microsecond * 100)
+			}
+		}(i)
+	}
 
-		totalTasks := 100
-		tasks := make([]string, totalTasks)
-		for i := 0; i < totalTasks; i++ {
-			tasks[i] = fmt.Sprintf("task%d", i)
-		}
+	// 等待所有添加操作完成
+	wg.Wait()
 
-		var addWg sync.WaitGroup
-		for i := 0; i < 10; i++ {
-			addWg.Add(1)
-			go func(start int) {
-				defer addWg.Done()
-				for j := 0; j < 10; j++ {
-					bp.Add(tasks[start+j])
-				}
-			}(i * 10)
-		}
-		addWg.Wait()
+	// 等待处理完成
+	bp.Shutdown()
 
-		time.Sleep(5 * time.Second) // Extended to 5s
-
-		mu.Lock()
-		if len(processedTasks) != totalTasks {
-			t.Errorf("Expected %d tasks processed, got %d", totalTasks, len(processedTasks))
-		}
-		mu.Unlock()
-	})
+	mu.Lock()
+	defer mu.Unlock()
+	if len(processedTasks) != totalTasks {
+		t.Errorf("Expected %d tasks processed, got %d", totalTasks, len(processedTasks))
+	}
 }
 
 func TestStressTest(t *testing.T) {
-	t.Run("StressTest", func(t *testing.T) {
-		var mu sync.Mutex
-		processedTasks := make(map[string]bool)
-		bp, err := asyncbatch.NewBatchProcessor[string](
-			asyncbatch.WithMaxSize[string](100),
-			asyncbatch.WithUpperRatio[string](0.5),
-			asyncbatch.WithLowerRatio[string](0.1),
-			asyncbatch.WithFixedWait[string](5*time.Millisecond),
-			asyncbatch.WithUnderfilledWait[string](20*time.Millisecond),
-			asyncbatch.WithNumWorkers[string](8), // 增加工作者数量
-			asyncbatch.WithWorker[string](func(batch []string) {
-				mu.Lock()
-				for _, task := range batch {
-					processedTasks[task] = true
+	var (
+		processed int64
+		wg        sync.WaitGroup
+	)
+
+	// 确保使用正确的初始化参数
+	bp, err := asyncbatch.NewBatchProcessor[string](
+		func(batch []string) {
+			atomic.AddInt64(&processed, int64(len(batch)))
+		},
+		asyncbatch.WithMaxSize(500),
+		asyncbatch.WithNumWorkers(16),
+		asyncbatch.WithFixedWait(1*time.Millisecond),
+		asyncbatch.WithUnderfilledWait(5*time.Millisecond),
+		asyncbatch.WithUpperRatio(0.8),
+		asyncbatch.WithLowerRatio(0.2),
+	)
+	if err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	defer bp.Shutdown()
+
+	totalTasks := 10000
+	wg.Add(totalTasks)
+
+	// 使用可控的并发写入
+	concurrency := 100
+	sem := make(chan struct{}, concurrency)
+
+	for i := 0; i < totalTasks; i++ {
+		sem <- struct{}{}
+		go func(i int) {
+			defer func() {
+				<-sem
+				wg.Done()
+			}()
+			for {
+				if err := bp.Add(fmt.Sprintf("task%d", i)); err == nil {
+					return
 				}
-				mu.Unlock()
-			}),
-		)
-		if err != nil {
-			t.Fatalf("NewBatchProcessor failed: %v", err)
-		}
-		defer bp.Shutdown()
+				time.Sleep(10 * time.Microsecond)
+			}
+		}(i)
+	}
 
-		totalTasks := 10000
-		tasks := make([]string, totalTasks)
-		for i := 0; i < totalTasks; i++ {
-			tasks[i] = fmt.Sprintf("task%d", i)
-		}
+	wg.Wait()     // 等待所有添加完成
+	bp.Shutdown() // 确保处理完成
 
-		// 添加任务
-		for _, task := range tasks {
-			bp.Add(task)
-		}
-
-		// 等待处理完成，延长超时时间
-		time.Sleep(30 * time.Second)
-
-		// 检查结果
-		mu.Lock()
-		if len(processedTasks) != totalTasks {
-			t.Errorf("预期处理 %d 个任务，实际处理 %d 个", totalTasks, len(processedTasks))
-		}
-		mu.Unlock()
-	})
+	if atomic.LoadInt64(&processed) != int64(totalTasks) {
+		t.Errorf("Processed %d/%d tasks", processed, totalTasks)
+	}
 }

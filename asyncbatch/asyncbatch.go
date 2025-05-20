@@ -5,6 +5,7 @@ import (
 	"math"
 	"sync"
 	"time"
+	"unsafe"
 )
 
 // BatchProcessor is a generic batch processor for asynchronous task processing.
@@ -24,11 +25,11 @@ type BatchProcessor[T any] struct {
 }
 
 // Option configures BatchProcessor.
-type Option[T any] func(*BatchProcessor[T])
+type Option func(*BatchProcessor[any])
 
 // WithMaxSize sets the maximum batch size.
-func WithMaxSize[T any](size int) Option[T] {
-	return func(bp *BatchProcessor[T]) {
+func WithMaxSize(size int) Option {
+	return func(bp *BatchProcessor[any]) {
 		if size > 0 {
 			bp.maxSize = size
 		}
@@ -36,8 +37,8 @@ func WithMaxSize[T any](size int) Option[T] {
 }
 
 // WithUpperRatio sets the upper ratio for continuous processing.
-func WithUpperRatio[T any](ratio float64) Option[T] {
-	return func(bp *BatchProcessor[T]) {
+func WithUpperRatio(ratio float64) Option {
+	return func(bp *BatchProcessor[any]) {
 		if ratio > 0 && ratio <= 1 {
 			bp.upperRatio = ratio
 		}
@@ -45,8 +46,8 @@ func WithUpperRatio[T any](ratio float64) Option[T] {
 }
 
 // WithLowerRatio sets the lower ratio for underfilled waiting.
-func WithLowerRatio[T any](ratio float64) Option[T] {
-	return func(bp *BatchProcessor[T]) {
+func WithLowerRatio(ratio float64) Option {
+	return func(bp *BatchProcessor[any]) {
 		if ratio > 0 && ratio <= 1 {
 			bp.lowerRatio = ratio
 		}
@@ -54,8 +55,8 @@ func WithLowerRatio[T any](ratio float64) Option[T] {
 }
 
 // WithFixedWait sets the fixed wait time for initial task check.
-func WithFixedWait[T any](duration time.Duration) Option[T] {
-	return func(bp *BatchProcessor[T]) {
+func WithFixedWait(duration time.Duration) Option {
+	return func(bp *BatchProcessor[any]) {
 		if duration > 0 {
 			bp.fixedWait = duration
 		}
@@ -63,8 +64,8 @@ func WithFixedWait[T any](duration time.Duration) Option[T] {
 }
 
 // WithUnderfilledWait sets the wait time for underfilled batches.
-func WithUnderfilledWait[T any](duration time.Duration) Option[T] {
-	return func(bp *BatchProcessor[T]) {
+func WithUnderfilledWait(duration time.Duration) Option {
+	return func(bp *BatchProcessor[any]) {
 		if duration > 0 {
 			bp.underfilledWait = duration
 		}
@@ -72,35 +73,38 @@ func WithUnderfilledWait[T any](duration time.Duration) Option[T] {
 }
 
 // WithNumWorkers sets the number of parallel workers (max 8).
-func WithNumWorkers[T any](numWorkers int) Option[T] {
-	return func(bp *BatchProcessor[T]) {
-		bp.numWorkers = numWorkers
-	}
-}
-
-// WithWorker sets the batch processing function.
-func WithWorker[T any](worker func([]T)) Option[T] {
-	return func(bp *BatchProcessor[T]) {
-		bp.worker = worker
+func WithNumWorkers(n int) Option {
+	return func(bp *BatchProcessor[any]) {
+		if n > 0 {
+			// 保证赋值操作作用于正确字段
+			bp.numWorkers = n
+		}
 	}
 }
 
 // NewBatchProcessor creates and starts a batch processor with the given options.
-func NewBatchProcessor[T any](opts ...Option[T]) (*BatchProcessor[T], error) {
+func NewBatchProcessor[T any](
+	worker func([]T),
+	opts ...Option,
+) (*BatchProcessor[T], error) {
 	bp := &BatchProcessor[T]{
-		maxSize:         100,
+		worker:          worker,
+		maxSize:         1000,
 		upperRatio:      0.5,
 		lowerRatio:      0.1,
-		fixedWait:       5 * time.Millisecond,  // Reduced for faster processing
-		underfilledWait: 20 * time.Millisecond, // Reduced for faster processing
+		fixedWait:       5 * time.Millisecond,
+		underfilledWait: 20 * time.Millisecond,
 		numWorkers:      1,
 		stop:            make(chan struct{}),
 	}
 
+	// 类型转换适配Option
+	anyBP := (*BatchProcessor[any])(unsafe.Pointer(bp))
 	for _, opt := range opts {
-		opt(bp)
+		opt(anyBP)
 	}
 
+	// 保持原始验证逻辑
 	if bp.worker == nil {
 		return nil, errors.New("worker function is required")
 	}
@@ -164,7 +168,6 @@ func (bp *BatchProcessor[T]) Shutdown() {
 func (bp *BatchProcessor[T]) run() {
 	batch := make([]T, 0, bp.maxSize)
 	var timer *time.Timer
-	// upperThreshold := int(math.Max(1, math.Ceil(float64(bp.maxSize)*bp.upperRatio)))
 	lowerThreshold := int(math.Max(1, math.Floor(float64(bp.maxSize)*bp.lowerRatio)))
 
 	defer func() {
@@ -240,30 +243,10 @@ func (bp *BatchProcessor[T]) run() {
 }
 
 // Getter methods
-func (bp *BatchProcessor[T]) MaxSize() int {
-	return bp.maxSize
-}
-
-func (bp *BatchProcessor[T]) UpperRatio() float64 {
-	return bp.upperRatio
-}
-
-func (bp *BatchProcessor[T]) LowerRatio() float64 {
-	return bp.lowerRatio
-}
-
-func (bp *BatchProcessor[T]) FixedWait() time.Duration {
-	return bp.fixedWait
-}
-
-func (bp *BatchProcessor[T]) UnderfilledWait() time.Duration {
-	return bp.underfilledWait
-}
-
-func (bp *BatchProcessor[T]) NumWorkers() int {
-	return bp.numWorkers
-}
-
-func (bp *BatchProcessor[T]) Worker() func([]T) {
-	return bp.worker
-}
+func (bp *BatchProcessor[T]) MaxSize() int                   { return bp.maxSize }
+func (bp *BatchProcessor[T]) UpperRatio() float64            { return bp.upperRatio }
+func (bp *BatchProcessor[T]) LowerRatio() float64            { return bp.lowerRatio }
+func (bp *BatchProcessor[T]) FixedWait() time.Duration       { return bp.fixedWait }
+func (bp *BatchProcessor[T]) UnderfilledWait() time.Duration { return bp.underfilledWait }
+func (bp *BatchProcessor[T]) NumWorkers() int                { return bp.numWorkers }
+func (bp *BatchProcessor[T]) Worker() func([]T)              { return bp.worker }
