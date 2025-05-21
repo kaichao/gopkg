@@ -1,96 +1,60 @@
 package pgbulk
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 )
 
-// InsertReturningID performs batch inserts and returns generated IDs (e.g., from a SERIAL or IDENTITY column).
-func InsertReturningID(db *sql.DB, sqlTemplate string, data [][]interface{}, returningColumn ...string) ([]int, error) {
-	if len(data) == 0 {
-		return nil, nil
+// InsertReturningID 插入数据并返回插入行的 ID
+func InsertReturningID(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, returningColumn ...string) ([]int, error) {
+	// 默认返回的列名为 "id"
+	returning := "id"
+	if len(returningColumn) > 0 {
+		returning = returningColumn[0]
 	}
 
-	paramsPerRow := len(data[0])
-	if paramsPerRow == 0 {
-		return nil, nil
-	}
-
-	const maxParamLimit = 65535
-	maxBatchSize := maxParamLimit / paramsPerRow
-	if maxBatchSize == 0 {
-		maxBatchSize = 1
-	}
-
-	// 默认返回列为 "id"，如果指定则使用用户提供的列
-	retCol := "id"
-	if len(returningColumn) > 0 && returningColumn[0] != "" {
-		retCol = returningColumn[0]
-	}
-
-	var insertedIDs []int
-
-	// 修改 3: 添加事务支持，确保原子性
-	tx, err := db.Begin()
-	if err != nil {
-		return nil, fmt.Errorf("failed to begin transaction: %v", err)
-	}
-	defer tx.Rollback() // 如果未提交，则回滚
-
-	for start := 0; start < len(data); start += maxBatchSize {
-		end := start + maxBatchSize
-		if end > len(data) {
-			end = len(data)
-		}
-		batch := data[start:end]
-
+	// 构建 VALUES 部分
+	var valuePlaceholders []string
+	for i := range data {
 		var placeholders []string
-		var args []interface{}
-		argIdx := 1
-		for _, row := range batch {
-			valuePlaceholders := make([]string, len(row))
-			for i := range row {
-				valuePlaceholders[i] = fmt.Sprintf("$%d", argIdx)
-				argIdx++
-			}
-			placeholders = append(placeholders, fmt.Sprintf("(%s)", strings.Join(valuePlaceholders, ",")))
-			args = append(args, row...)
+		for j := 0; j < len(data[i]); j++ {
+			placeholders = append(placeholders, fmt.Sprintf("$%d", i*len(data[i])+j+1))
 		}
+		valuePlaceholders = append(valuePlaceholders, "("+strings.Join(placeholders, ",")+")")
+	}
+	valuesClause := strings.Join(valuePlaceholders, ",")
 
-		// 构造查询，包含 RETURNING 子句
-		query := fmt.Sprintf("%s VALUES %s RETURNING %s", sqlTemplate, strings.Join(placeholders, ","), retCol)
+	// 构建完整的 SQL 语句，包含 RETURNING 子句
+	fullSQL := fmt.Sprintf("%s VALUES %s RETURNING %s", sqlTemplate, valuesClause, returning)
 
-		rows, err := tx.Query(query, args...)
-		if err != nil {
-			return nil, fmt.Errorf("batch insert returning ID error: %v", err)
-		}
-		defer rows.Close()
-
-		batchInsertedIDs := make([]int, 0, len(batch))
-		for rows.Next() {
-			var id int
-			if err := rows.Scan(&id); err != nil {
-				return nil, fmt.Errorf("scan error: %v", err)
-			}
-			batchInsertedIDs = append(batchInsertedIDs, id)
-		}
-		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("rows error: %v", err)
-		}
-
-		// 修改 4: 验证返回的 ID 数量与批次大小匹配
-		if len(batchInsertedIDs) != len(batch) {
-			return nil, fmt.Errorf("expected %d IDs, got %d", len(batch), len(batchInsertedIDs))
-		}
-
-		insertedIDs = append(insertedIDs, batchInsertedIDs...)
+	// 准备参数
+	var args []interface{}
+	for _, row := range data {
+		args = append(args, row...)
 	}
 
-	// 提交事务
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("failed to commit transaction: %v", err)
+	// 执行 SQL 语句并获取返回的 ID
+	rows, err := conn.Query(context.Background(), fullSQL, args...)
+	if err != nil {
+		return nil, fmt.Errorf("插入失败: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("扫描返回的 ID 失败: %w", err)
+		}
+		ids = append(ids, id)
 	}
 
-	return insertedIDs, nil
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("读取行失败: %w", err)
+	}
+
+	return ids, nil
 }

@@ -1,86 +1,63 @@
 package pgbulk_test
 
 import (
-	"database/sql"
-	"fmt"
-	"regexp"
+	"context"
 	"testing"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5"
 	"github.com/kaichao/gopkg/pgbulk"
-	"github.com/stretchr/testify/assert"
 )
 
-func TestMockInsertReturningID(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	assert.NoError(t, err)
-	defer db.Close()
+func TestInsertReturningID(t *testing.T) {
+	// Connect to the database
+	conn, err := pgx.Connect(context.Background(), "postgres://postgres:secret@localhost/postgres")
+	if err != nil {
+		t.Fatalf("无法连接数据库: %v", err)
+	}
+	defer conn.Close(context.Background())
 
-	sqlTemplate := "INSERT INTO test_table (col1, col2) VALUES %s"
+	// Create a test table
+	_, err = conn.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS test_table (
+			id SERIAL PRIMARY KEY,
+			col1 TEXT,
+			col2 TEXT
+		)
+	`)
+	if err != nil {
+		t.Fatalf("创建测试表失败: %v", err)
+	}
+
+	// Prepare test data
+	sqlTemplate := "INSERT INTO test_table (col1, col2)"
 	data := [][]interface{}{
-		{1, "a"},
-		{2, "b"},
-		{3, "c"},
+		{"value1", "value2"},
+		{"value3", "value4"},
 	}
 
-	// 模拟实际生成的 SQL 语句
-	actualSQL := "INSERT INTO test_table (col1, col2) VALUES ($1,$2),($3,$4),($5,$6) RETURNING id"
-
-	// 用 QuoteMeta 来确保正则安全匹配实际 SQL
-	expectedSQL := regexp.QuoteMeta(actualSQL)
-
-	rows := sqlmock.NewRows([]string{"id"}).
-		AddRow(101).
-		AddRow(102).
-		AddRow(103)
-
-	mock.ExpectQuery(expectedSQL).
-		WithArgs(1, "a", 2, "b", 3, "c").
-		WillReturnRows(rows)
-
-	ids, err := pgbulk.InsertReturningID(db, sqlTemplate, data)
-	assert.NoError(t, err)
-	assert.Equal(t, []int{101, 102, 103}, ids)
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func ExampleInsertReturningID() {
-	db, err := sql.Open("postgres", "user=postgres password=secret dbname=postgres sslmode=disable")
+	// Call InsertReturningID function
+	ids, err := pgbulk.InsertReturningID(conn, sqlTemplate, data)
 	if err != nil {
-		fmt.Println("Failed to connect to database:", err)
-		return
+		t.Errorf("InsertReturningID 失败: %v", err)
 	}
-	defer db.Close()
 
-	// 创建测试表
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        name TEXT,
-        age INT
-    )`)
+	// Verify the number of returned IDs
+	if len(ids) != 2 {
+		t.Errorf("预期返回 2 个 ID，实际得到 %d 个", len(ids))
+	}
+
+	// Verify if each returned ID exists in the database
+	for _, id := range ids {
+		var exists bool
+		err = conn.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM test_table WHERE id = $1)", id).Scan(&exists)
+		if err != nil || !exists {
+			t.Errorf("ID %d 在数据库中未找到", id)
+		}
+	}
+
+	// Clean up test data
+	_, err = conn.Exec(context.Background(), "DROP TABLE test_table")
 	if err != nil {
-		fmt.Println("Failed to create table:", err)
-		return
+		t.Errorf("删除测试表失败: %v", err)
 	}
-
-	// 准备批量插入的数据
-	data := [][]interface{}{
-		{"Alice", 25},
-		{"Bob", 30},
-		{"Charlie", 35},
-	}
-
-	// 插入并获取 ID
-	ids, err := pgbulk.InsertReturningID(db, "INSERT INTO users (name, age)", data)
-	if err != nil {
-		fmt.Println("Bulk insert failed:", err)
-		return
-	}
-
-	// 打印插入的 ID
-	fmt.Println("Inserted IDs:", ids)
-
-	// Output:
-	// Inserted IDs: [1 2 3]
 }

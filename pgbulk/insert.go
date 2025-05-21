@@ -1,55 +1,40 @@
 package pgbulk
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"strings"
 
-	"github.com/sirupsen/logrus"
+	"github.com/jackc/pgx/v5"
 )
 
-// Insert performs a regular batch insert into PostgreSQL.
-func Insert(db *sql.DB, sqlTemplate string, data [][]interface{}) error {
-	if len(data) == 0 {
-		return fmt.Errorf("data is empty")
-	}
-
-	paramsPerRow := len(data[0])
-	maxBatchSize := 65535 / paramsPerRow
-	logrus.Infof("Calculated max batch size: %d rows per batch", maxBatchSize)
-
-	for start := 0; start < len(data); start += maxBatchSize {
-		end := start + maxBatchSize
-		if end > len(data) {
-			end = len(data)
-		}
-
-		batch := data[start:end]
+// Insert 使用提供的 SQL 模板和数据将数据插入数据库
+func Insert(conn *pgx.Conn, sqlTemplate string, data [][]interface{}) error {
+	// 构建 VALUES 部分
+	var valuePlaceholders []string
+	for i := range data {
 		var placeholders []string
-		var args []interface{}
-
-		for i, row := range batch {
-			placeholders = append(placeholders, fmt.Sprintf("(%s)", strings.Join(makePlaceholders(len(row), i*len(row)), ",")))
-			args = append(args, row...)
+		for j := 0; j < len(data[i]); j++ {
+			placeholders = append(placeholders, fmt.Sprintf("$%d", i*len(data[i])+j+1))
 		}
+		valuePlaceholders = append(valuePlaceholders, "("+strings.Join(placeholders, ",")+")")
+	}
+	valuesClause := strings.Join(valuePlaceholders, ",")
 
-		query := fmt.Sprintf("%s VALUES %s", sqlTemplate, strings.Join(placeholders, ","))
-		if _, err := db.Exec(query, args...); err != nil {
-			logrus.Errorf("Batch insert execution error: %v", err)
-			return err
-		}
-		logrus.Infof("Batch insert completed for %d rows.", len(batch))
+	// 构建完整的 SQL 语句
+	fullSQL := fmt.Sprintf("%s VALUES %s", sqlTemplate, valuesClause)
+
+	// 准备参数
+	var args []interface{}
+	for _, row := range data {
+		args = append(args, row...)
 	}
 
-	logrus.Infof("Total inserted: %d rows.", len(data))
+	// 执行 SQL 语句
+	_, err := conn.Exec(context.Background(), fullSQL, args...)
+	if err != nil {
+		return fmt.Errorf("插入失败: %w", err)
+	}
+
 	return nil
-}
-
-// makePlaceholders generates placeholders like $1, $2, ..., $N
-func makePlaceholders(count, offset int) []string {
-	placeholders := make([]string, count)
-	for i := 0; i < count; i++ {
-		placeholders[i] = fmt.Sprintf("$%d", i+1+offset)
-	}
-	return placeholders
 }
