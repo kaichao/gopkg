@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -37,89 +36,70 @@ func DefaultSSHKeyPath() (string, error) {
 	return keyPath, nil
 }
 
-// RunSSHCommand executes command via SSH with full lifecycle management
-//
-// Steps:
-// 1. Establish SSH connection with authentication
-// 2. Create session and setup I/O pipes
-// 3. Start command with process group isolation
-// 4. Handle timeout/cancellation signals
-// 5. Cleanup resources (connections, temp files)
-//
-// Edge cases:
-// - Network interruptions during execution
-// - Malformed remote command parsing
-// - Permission denied errors
-func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, string, error) {
-	// 处理密钥路径
-	var keyPath string
+// getAuthMethod returns the appropriate SSH authentication method based on config
+func getAuthMethod(config SSHConfig) (ssh.AuthMethod, error) {
 	if config.KeyPath != "" {
-		keyPath = config.KeyPath
-	} else {
-		var err error
-		keyPath, err = DefaultSSHKeyPath()
+		key, err := os.ReadFile(config.KeyPath)
 		if err != nil {
-			return 125, "", "", err
-		}
-	}
-
-	// SSH 认证
-	var authMethod ssh.AuthMethod
-	if keyPath != "" {
-		key, err := os.ReadFile(keyPath)
-		if err != nil {
-			return 125, "", "", fmt.Errorf("read key file failed: %v", err)
+			return nil, fmt.Errorf("read key file failed: %v", err)
 		}
 		signer, err := ssh.ParsePrivateKey(key)
 		if err != nil {
-			return 125, "", "", fmt.Errorf("parse private key failed: %v", err)
+			return nil, fmt.Errorf("parse private key failed: %v", err)
 		}
-		authMethod = ssh.PublicKeys(signer)
-	} else if config.Password != "" {
-		authMethod = ssh.Password(config.Password)
-	} else {
-		return 125, "", "", fmt.Errorf("no authentication method provided")
+		return ssh.PublicKeys(signer), nil
+	}
+	if config.Password != "" {
+		return ssh.Password(config.Password), nil
+	}
+	return nil, fmt.Errorf("no authentication method provided")
+}
+
+// createSSHClient creates a new SSH client with timeout handling
+func createSSHClient(config SSHConfig, timeout int) (*ssh.Client, context.Context, context.CancelFunc, error) {
+	authMethod, err := getAuthMethod(config)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
-	// SSH 客户端配置
 	clientConfig := &ssh.ClientConfig{
 		User:            config.User,
 		Auth:            []ssh.AuthMethod{authMethod},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 
-	// 超时控制
-	baseCtx := context.Background()
-	ctx := baseCtx
+	ctx := context.Background()
 	var cancel context.CancelFunc
 	if timeout > 0 {
-		ctx, cancel = context.WithTimeout(baseCtx, time.Duration(timeout)*time.Second)
-		defer cancel()
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	}
 
-	// 连接 SSH
 	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", config.Host, config.Port), clientConfig)
 	if err != nil {
-		return 125, "", "", fmt.Errorf("ssh dial failed: %w", err)
+		if cancel != nil {
+			cancel()
+		}
+		return nil, nil, nil, fmt.Errorf("ssh dial failed: %w", err)
 	}
-	defer client.Close()
+	return client, ctx, cancel, nil
+}
 
-	session, err := client.NewSession()
-	if err != nil {
-		return 125, "", "", fmt.Errorf("ssh: create session failed: %w", err)
-	}
-	defer session.Close()
-
-	// ✅ 生成唯一标识符（便于测试 pgrep）
+// wrapCommand creates a wrapped command with process tracking
+func wrapCommand(command string) (string, string) {
 	marker := fmt.Sprintf("MARKER_%d", time.Now().UnixNano())
-	cmdWithMarker := fmt.Sprintf("%s; # %s", command, marker)
+	wrapped := fmt.Sprintf(`bash -c '
+		startup_output=$( (%s) 2>&1 )
+		echo "$startup_output"
+		nohup bash -c "%s" >/dev/null 2>&1 &
+		pid=$!
+		disown $pid
+		echo "$pid %s"
+	'`, command, strings.ReplaceAll(command, "\"", "\\\""), marker)
+	return wrapped, marker
+}
 
-	// ✅ 包装命令：setsid + 记录 PID
-	// Embed the marker in an environment variable or argument that is likely to show up in process listings.
-	wrappedCmd := fmt.Sprintf("bash -c 'export MARKER=%s; setsid bash -c \"%s\" & echo $! > /tmp/ssh_cmd_pid_%d; wait'",
-		marker, strings.ReplaceAll(cmdWithMarker, "\"", "\\\""), os.Getpid())
-
-	// 捕获输出
+// captureOutput captures stdout/stderr from session
+func captureOutput(session *ssh.Session) (*bytes.Buffer, *bytes.Buffer, *sync.WaitGroup) {
 	stdoutPipe, _ := session.StdoutPipe()
 	stderrPipe, _ := session.StderrPipe()
 	var stdoutBuf, stderrBuf bytes.Buffer
@@ -127,17 +107,33 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 	wg.Add(2)
 	go func() { defer wg.Done(); _, _ = io.Copy(&stdoutBuf, stdoutPipe) }()
 	go func() { defer wg.Done(); _, _ = io.Copy(&stderrBuf, stderrPipe) }()
+	return &stdoutBuf, &stderrBuf, &wg
+}
 
-	// 启动命令
-	if err := session.Start(wrappedCmd); err != nil {
-		return 125, "", "", fmt.Errorf("start command failed: %v", err)
+// cleanupProcesses performs thorough cleanup of remote processes
+func cleanupProcesses(client *ssh.Client, command string, marker string) error {
+	cleanupCmds := []string{
+		fmt.Sprintf("pkill -9 -f '%s'", command),
+		fmt.Sprintf("pkill -9 -f '%s'", marker),
+		"pkill -9 -f 'sleep'",
+		"pkill -9 -f 'singularity'",
 	}
 
-	pidFile := fmt.Sprintf("/tmp/ssh_cmd_pid_%d", os.Getpid())
+	for _, cmd := range cleanupCmds {
+		session, _ := client.NewSession()
+		_ = session.Run(cmd)
+		session.Close()
+		time.Sleep(300 * time.Millisecond)
+	}
+	return nil
+}
 
-	// ✅ 超时清理逻辑
+// executeCommand runs the command and handles timeout
+func executeCommand(session *ssh.Session, ctx context.Context, client *ssh.Client,
+	stdoutBuf *bytes.Buffer, stderrBuf *bytes.Buffer, wg *sync.WaitGroup) (int, error) {
 	done := make(chan struct{})
 	var waitErr error
+
 	go func() {
 		waitErr = session.Wait()
 		close(done)
@@ -146,69 +142,60 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 	select {
 	case <-ctx.Done():
 		if ctx.Err() == context.DeadlineExceeded {
-			// ✅ 主动关闭会话连接
+			_ = session.Signal(ssh.SIGTERM)
+			time.Sleep(500 * time.Millisecond)
 			_ = session.Signal(ssh.SIGKILL)
 			_ = session.Close()
-
-			// ✅ 远程 kill
-			cleanupRemoteProcess(clientConfig, config, pidFile)
-
-			// ✅ 等待输出收集完毕
 			wg.Wait()
-			cleanupPidFile(clientConfig, config, pidFile)
-			return 124, stdoutBuf.String(), stderrBuf.String(), fmt.Errorf("command timed out")
+			return 124, fmt.Errorf("command timed out")
 		}
 	case <-done:
-		// 命令执行完毕
+		wg.Wait()
 	}
-	wg.Wait()
 
-	// 处理退出码
-	var exitCode int
 	if waitErr != nil {
 		if exitErr, ok := waitErr.(*ssh.ExitError); ok {
-			exitCode = exitErr.ExitStatus()
-		} else {
-			exitCode = 125
-			err = waitErr
+			return exitErr.ExitStatus(), nil
 		}
-	} else {
-		exitCode = 0
+		return 125, waitErr
 	}
-
-	// 清理 PID 文件
-	cleanupPidFile(clientConfig, config, pidFile)
-
-	return exitCode, stdoutBuf.String(), stderrBuf.String(), err
+	return 0, nil
 }
 
-// cleanupRemoteProcess kills the remote process group based on PID file.
-func cleanupRemoteProcess(clientConfig *ssh.ClientConfig, config SSHConfig, pidFile string) {
-	client, err := retryDial(config, clientConfig, 3) // 传入 clientConfig
+// RunSSHCommand executes command via SSH with full lifecycle management
+func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, string, error) {
+	client, ctx, cancel, err := createSSHClient(config, timeout)
 	if err != nil {
-		logrus.Errorf("cleanup: ssh dial failed: %v", err)
-		return
+		return 125, "", "", err
 	}
 	defer client.Close()
+	if cancel != nil {
+		defer cancel()
+	}
 
 	session, err := client.NewSession()
 	if err != nil {
-		logrus.Errorf("cleanup: create session failed: %v", err)
-		return
+		return 125, "", "", fmt.Errorf("ssh: create session failed: %w", err)
 	}
 	defer session.Close()
 
-	cleanupCmd := fmt.Sprintf(`
-        if [ -f %s ]; then
-            pgid=$(cat %s | xargs -I{} ps -o pgid= {} | grep -o '[0-9]*');
-            kill -TERM -$pgid 2>/dev/null || kill -KILL -$pgid 2>/dev/null;
-        fi`, pidFile, pidFile)
+	wrappedCmd, marker := wrapCommand(command)
+	stdoutBuf, stderrBuf, wg := captureOutput(session)
 
-	if err := session.Run(cleanupCmd); err != nil {
-		logrus.Errorf("cleanup: failed to kill process group: %v", err)
+	if err := session.Start(wrappedCmd); err != nil {
+		return 125, "", "", fmt.Errorf("start command failed: %v", err)
 	}
+
+	exitCode, err := executeCommand(session, ctx, client, stdoutBuf, stderrBuf, wg)
+	if err != nil {
+		_ = cleanupProcesses(client, command, marker)
+		return exitCode, stdoutBuf.String(), stderrBuf.String(), err
+	}
+
+	return exitCode, stdoutBuf.String(), stderrBuf.String(), nil
 }
 
+// retryDial attempts to establish SSH connection with retries
 func retryDial(config SSHConfig, clientConfig *ssh.ClientConfig, attempts int) (*ssh.Client, error) {
 	var client *ssh.Client
 	var err error
@@ -220,26 +207,4 @@ func retryDial(config SSHConfig, clientConfig *ssh.ClientConfig, attempts int) (
 		time.Sleep(500 * time.Millisecond)
 	}
 	return nil, err
-}
-
-// cleanupPidFile removes the temporary PID file.
-func cleanupPidFile(clientConfig *ssh.ClientConfig, config SSHConfig, pidFile string) {
-	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", config.Host, config.Port), clientConfig)
-	if err != nil {
-		logrus.Errorf("cleanup pid file: ssh dial failed: %v", err)
-		return
-	}
-	defer client.Close()
-
-	session, err := client.NewSession()
-	if err != nil {
-		logrus.Errorf("cleanup pid file: create session failed: %v", err)
-		return
-	}
-	defer session.Close()
-
-	rmCmd := fmt.Sprintf("rm -f %s", pidFile)
-	if err := session.Run(rmCmd); err != nil {
-		logrus.Errorf("cleanup pid file: failed to remove %s: %v", pidFile, err)
-	}
 }

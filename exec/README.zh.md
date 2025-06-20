@@ -74,3 +74,12 @@ go func() {
     syscall.Kill(-pid, syscall.SIGTERM)
 }()
 ```
+
+## 测试
+
+- 创建测试用的singularity镜像
+```sh
+mkdir -p ~/singularity
+docker save debian:12-slim -o debian.tar
+singularity build ~/singularity/debian.sif docker-archive://debian.tar
+```
