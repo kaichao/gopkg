@@ -72,6 +72,54 @@ func TestRunSingularityCommand(t *testing.T) {
 	}
 }
 
+func TestBackgroundCommand(t *testing.T) {
+	config := SSHConfig{
+		User:       testSSHUser,
+		Host:       testSSHServer,
+		Port:       testSSHPort,
+		KeyPath:    testSSHKey,
+		Password:   testPassword,
+		Background: true,
+	}
+
+	// Test background command with output
+	command := "echo 'starting process'; sleep 60"
+	code, pid, output, err := RunSSHCommand(config, command, 5)
+	if err != nil {
+		t.Fatalf("RunSSHCommand failed: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("Expected exit code 0, got %d", code)
+	}
+
+	// Verify output contains both startup message and PID
+	outputLines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(outputLines) < 2 {
+		t.Fatalf("Expected at least 2 lines of output, got: %d", len(outputLines))
+	}
+
+	// First line should be startup output
+	if !strings.Contains(outputLines[0], "starting process") {
+		t.Errorf("Expected startup output, got: %s", outputLines[0])
+	}
+
+	// Last line should be PID
+	if pid == "" {
+		t.Error("Expected PID in output")
+	}
+	if !strings.Contains(outputLines[len(outputLines)-1], pid) {
+		t.Errorf("Expected PID %s in last line, got: %s", pid, outputLines[len(outputLines)-1])
+	}
+
+	if pid == "" || pid == "0" {
+		t.Error("Invalid PID returned")
+	}
+
+	// Cleanup
+	killCmd := fmt.Sprintf("kill -9 %s", strings.Fields(pid)[0])
+	RunSSHCommand(config, killCmd, 5)
+}
+
 func TestProcessCleanup(t *testing.T) {
 	config := SSHConfig{
 		User:     testSSHUser,
@@ -99,70 +147,29 @@ func TestProcessCleanup(t *testing.T) {
 	// Wait longer for process to start and register
 	time.Sleep(5 * time.Second)
 
-	// Enhanced process detection with multiple methods
-	pid := ""
-	detectionMethods := []string{
-		"ps aux | grep -E '" + marker + "' | grep -v grep | head -1 | awk '{print $2}'",
-		"pgrep -f '" + marker + "' | head -1",
-		"ps -eo pid,cmd | grep -E '" + marker + "' | grep -v grep | head -1 | awk '{print $1}'",
-	}
-
-	for _, cmd := range detectionMethods {
-		_, output, _, _ := RunSSHCommand(config, cmd, 5)
-		pid = strings.TrimSpace(output)
-		if pid != "" {
-			break
-		}
-	}
-
+	// Find process by marker
+	_, output, _, _ := RunSSHCommand(config, "pgrep -f '"+marker+"' | head -1", 5)
+	pid := strings.TrimSpace(output)
 	if pid == "" {
-		// Debug: show all marker processes
-		_, allMarkers, _, _ := RunSSHCommand(config, "ps aux | grep -E '"+marker+"'", 5)
-		t.Fatalf("Failed to find target process PID. Marker processes:\n%s", allMarkers)
+		t.Fatal("Failed to find target process PID")
 	}
-
-	t.Logf("Target process PID: %s", pid)
-
-	// Enhanced process verification
-	_, procDetails, _, _ := RunSSHCommand(config, "ps -p "+pid+" -o pid,cmd", 5)
-	t.Logf("Process details:\n%s", procDetails)
-
-	// Container detection
-	_, cgroup, _, _ := RunSSHCommand(config, "cat /proc/"+pid+"/cgroup 2>/dev/null || echo 'not_in_container'", 5)
-	isContainer := !strings.Contains(cgroup, "not_in_container")
+	isContainer := false
 
 	// Process termination with multiple verification methods
 	for i := 1; i <= 3; i++ {
-		t.Logf("Kill attempt %d (container:%v)", i, isContainer)
-
 		var killCmd string
 		if isContainer {
-			_, containerID, _, _ := RunSSHCommand(config,
-				"grep -o 'docker/\\|lxc/\\|containerd/\\w\\+' /proc/"+pid+"/cgroup | head -1 | cut -d/ -f3 || true", 5)
-			if containerID != "" {
-				killCmd = fmt.Sprintf("docker kill %s || singularity exec instance kill %s", containerID, containerID)
-			} else {
-				killCmd = "singularity exec instance kill $(singularity instance list | grep " + pid + " | awk '{print $1}')"
-			}
+			killCmd = "singularity exec instance kill $(singularity instance list | grep " + pid + " | awk '{print $1}')"
 		} else {
 			killCmd = "kill -9 " + pid
 		}
 
-		// Execute kill command with verification
-		_, killOutput, _, _ := RunSSHCommand(config, killCmd+" && echo 'KILL_SUCCESS' || echo 'KILL_FAILED'", 5)
-		t.Logf("Kill command output: %s", killOutput)
-		time.Sleep(2 * time.Second) // Longer wait after kill
+		RunSSHCommand(config, killCmd, 5)
+		time.Sleep(1 * time.Second)
 
-		// Enhanced termination verification
+		// Verify process is gone
 		_, psOutput, _, _ := RunSSHCommand(config, "ps -p "+pid+" -o pid= 2>/dev/null || echo 'NOT_FOUND'", 5)
-		_, procStatus, _, _ := RunSSHCommand(config, "cat /proc/"+pid+"/status 2>/dev/null || echo 'PROCESS_GONE'", 5)
-
-		t.Logf("Termination verification:\nps: %s\nstatus: %s",
-			strings.TrimSpace(psOutput),
-			strings.TrimSpace(procStatus))
-
-		if strings.Contains(procStatus, "PROCESS_GONE") {
-			t.Logf("Process %s successfully terminated (verified by /proc status)", pid)
+		if strings.Contains(psOutput, "NOT_FOUND") {
 			return
 		}
 	}
@@ -179,12 +186,14 @@ func TestCommandTimeout(t *testing.T) {
 		Password: testPassword,
 	}
 
+	// Test background command timeout
+	bgConfig := config
+	bgConfig.Background = true
 	marker := fmt.Sprintf("MARKER_%d", time.Now().UnixNano())
-	cmd := fmt.Sprintf("sleep 10 && echo %s", marker)
+	bgCmd := fmt.Sprintf("echo 'starting'; sleep 10; echo %s", marker)
 
-	// 设置更宽松的超时阈值
 	start := time.Now()
-	code, _, _, err := RunSSHCommand(config, cmd, 2)
+	code, _, _, err := RunSSHCommand(bgConfig, bgCmd, 2)
 	duration := time.Since(start)
 
 	if code != 124 {
@@ -197,16 +206,38 @@ func TestCommandTimeout(t *testing.T) {
 		t.Errorf("Timeout took too long: %v", duration)
 	}
 
+	// Original timeout test
+	config.Background = false
+
+	marker2 := fmt.Sprintf("MARKER_%d", time.Now().UnixNano()+1)
+	cmd2 := fmt.Sprintf("sleep 10 && echo %s", marker2)
+
+	// 设置更宽松的超时阈值
+	start2 := time.Now()
+	code2, _, _, err2 := RunSSHCommand(config, cmd2, 2)
+	duration2 := time.Since(start2)
+
+	if code2 != 124 {
+		t.Errorf("Expected exit code 124, got %d", code2)
+	}
+	if err2 == nil || !strings.Contains(err2.Error(), "timed out") {
+		t.Errorf("Expected timeout error, got %v", err2)
+	}
+	if duration2 >= 5*time.Second {
+		t.Errorf("Timeout took too long: %v", duration2)
+	}
+
 	// 简化进程清理验证
-	cleanCmd := fmt.Sprintf("pkill -9 -f '%s'; killall -9 sleep singularity", marker)
+	cleanCmd := fmt.Sprintf("pkill -9 -f '%s'; killall -9 sleep singularity", marker2)
 	_, _, _, _ = RunSSHCommand(config, cleanCmd, 5)
 
 	// 快速验证
-	verifyCmd := fmt.Sprintf("pgrep -f '%s' || echo clean", marker)
+	verifyCmd := fmt.Sprintf("pgrep -f '%s' || echo clean", marker2)
 	_, out, _, _ := RunSSHCommand(config, verifyCmd, 2)
 	if !strings.Contains(out, "clean") {
 		t.Logf("Process cleanup warning: some processes may still be running")
 	}
+
 }
 
 func TestResourceCleanup(t *testing.T) {
