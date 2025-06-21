@@ -1,76 +1,198 @@
 # exec
 
-[中文](README.zh.md) | English
+English | [中文](README.zh.md)
 
-Cross-environment command execution toolkit for Go, supporting both local and SSH remote execution with full output capture.
+## Table of Contents
+1. [Features](#features)
+2. [Use Cases](#use-cases)
+3. [Installation](#installation)
+4. [Quick Start](#quick-start)
+5. [API Reference](#api-reference)
+6. [Security Considerations](#security-considerations)
+7. [Best Practices](#best-practices)
+8. [Advanced Usage](#advanced-usage)
+9. [FAQ](#faq)
+10. [Testing](#testing)
 
 ## Features
 
-- **Unified Interface**: Consistent API for local and remote execution
-- **Output Capture**: Simultaneous stream handling for stdout/stderr
-- **Timeout Control**: Configurable execution timeout with process cleanup
-- **SSH Support**: Key-based and password authentication
+Cross-environment command execution toolkit with:
+
+- **Unified Interface**: Same API for local, remote SSH and container execution
+- **Full Output Capture**: Synchronously captures stdout, stderr and exit code
+- **Flexible Timeout**: Supports both command-level and connection-level timeouts
+- **Multiple Auth Methods**: SSH supports key, password and agent forwarding
+- **Process Management**: Background process and process group support
 
 ## Use Cases
 
-- Bulk operations across server clusters
-- CI/CD pipeline task execution
-- Distributed system monitoring
-- Batch log collection/analysis
+### Batch Server Operations
+```go
+// Execute maintenance commands across servers
+for _, host := range servers {
+    config.Host = host
+    exec.RunSSHCommand(config, "apt update && apt upgrade -y", 300)
+}
+```
+
+### CI/CD Pipelines
+```go
+// Post-deployment verification
+if code, out, _ := exec.RunReturnAll("curl -sSf http://localhost:8080/health", 10); code != 0 {
+    log.Fatal("Service health check failed")
+}
+```
+
+### Container Management
+```go
+// Run diagnostic commands in containers
+exec.RunSSHCommand(config, "singularity exec app.sif df -h", 30)
+```
 
 ## Installation
+
 ```sh
 go get github.com/kaichao/gopkg/exec
 ```
 
 ## Quick Start
+
 ### Local Execution
 ```go
-code, stdout, stderr, err := exec.RunReturnAll("ls -l", 10) // 10s timeout
-fmt.Printf("Exit: %d\nOutput:\n%s\nError:\n%s", code, stdout, stderr)
+code, stdout, stderr, err := exec.RunReturnAll("ls -l /tmp", 10)
+if err != nil {
+    log.Printf("Execution failed: %v\nOutput: %s\nError: %s", err, stdout, stderr)
+}
 ```
 
-### SSH Execution
+### SSH Remote Execution
 ```go
 config := exec.SSHConfig{
     User:    "admin",
-    Host:    "192.168.1.100",
-    Port:    22,
-    KeyPath: "/path/to/private_key",
+    Host:    "10.0.0.1", 
+    KeyPath: "/home/user/.ssh/id_rsa",
 }
 
-code, out, errOut, err := exec.RunSSHCommand(config, "docker ps", 30) // 30s timeout
+// Execute and capture full output
+code, out, errOut, err := exec.RunSSHCommand(config, "docker ps -a", 30)
+```
+
+### Container Execution
+```go
+// Run commands in Singularity container
+cmd := "singularity exec /images/debian.sif apt-get update"
+RunSSHCommand(config, cmd, 60)
 ```
 
 ## API Reference
-### RunReturnAll
+
+### Core Methods
 ```go
-func RunReturnAll(command string, timeout int) (int, string, string, error)
+// Local execution
+func RunReturnAll(command string, timeout int) (code int, stdout string, stderr string, err error)
+
+// SSH execution 
+func RunSSHCommand(config SSHConfig, command string, timeout int) (code int, stdout string, stderr string, err error)
 ```
 
-### RunSSHCommand
-```go
-func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, string, error)
-```
-
-### SSHConfig
+### SSHConfig Struct
 ```go
 type SSHConfig struct {
-    User     string // SSH username
-    Host     string // Server IP/hostname
-    Port     int    // SSH port (default: 22)
-    KeyPath  string // Path to private key (default: ~/.ssh/id_rsa)
-    Password string // Password authentication
+    User     string // Required
+    Host     string // Required
+    Port     int    // Default 22
+    KeyPath  string // Preferred over password
+    Password string 
+    Timeout  int    // Connection timeout (seconds)
 }
 ```
 
-## Advanced Usage
-### Custom Signal Handling
+## Security Considerations
+
+1. **Authentication Security**
+   - Set SSH private key permissions to 600
+   - Avoid hardcoding passwords in code
+
+2. **Command Injection Protection**
+   ```go
+   // Unsafe
+   cmd := fmt.Sprintf("ls %s", userInput)
+   
+   // Safe approach
+   cmd := fmt.Sprintf("ls %s", filepath.Clean(userInput))
+   ```
+
+3. **Logging**
+   - Record metadata for critical operations (user, command, timestamp)
+   - Avoid logging sensitive output
+
+## Best Practices
+
+### Connection Reuse
 ```go
-// Terminate process group on SIGINT
-signal.Notify(sigChan, syscall.SIGINT)
-go func() {
-    <-sigChan
-    syscall.Kill(-pid, syscall.SIGTERM)
+var client *ssh.Client
+
+func getClient(config SSHConfig) (*ssh.Client, error) {
+    if client == nil {
+        // Initialize connection...
+    }
+    return client, nil
+}
+```
+
+### Error Handling
+```go
+// Check specific error types
+if errors.Is(err, exec.ErrTimeout) {
+    // Handle timeout
+}
+```
+
+### Resource Cleanup
+```go
+defer func() {
+    if cmd.Process != nil {
+        cmd.Process.Kill()
+    }
 }()
 ```
+
+## Advanced Usage
+
+### Signal Handling
+```go
+// Terminate entire process group
+syscall.Kill(-pid, syscall.SIGTERM)
+```
+
+### Long-running Processes
+```go
+// Run in background and get PID
+_, pid, _, _ := RunSSHCommand(config, "nohup long-running-cmd & echo $!", 10)
+```
+
+## FAQ
+
+### Connection Timeouts
+- Check network firewall settings
+- Increase connection timeout:
+  ```go
+  config.Timeout = 30 // seconds
+  ```
+
+### Output Truncation
+- Use buffers or temp files for large outputs
+- Set reasonable execution timeouts
+
+## Testing
+
+1. Prepare test Singularity image:
+```sh
+mkdir -p ~/singularity
+docker save debian:12-slim -o debian.tar
+singularity build ~/singularity/debian.sif docker-archive://debian.tar
+```
+
+2. Run unit tests:
+```sh
+cd exec && go test -v
