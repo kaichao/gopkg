@@ -13,9 +13,16 @@ var (
 	testSSHServer = "10.0.6.100"
 	testSSHPort   = 22
 	testSSHUser   = "root"
-	testSSHKey    = "/Users/kaichao/.ssh/id_rsa" // 默认使用用户主目录下的SSH密钥
-	testPassword  = ""                           // 可设置为密码认证
+	testSSHKey    = "" // 默认使用用户主目录下的SSH密钥
+	testPassword  = "" // 可设置为密码认证
 )
+
+func init() {
+	// 尝试设置默认SSH密钥路径用于测试
+	if path, err := defaultSSHKeyPath(); err == nil {
+		testSSHKey = path
+	}
+}
 
 func TestRunSingularityCommand(t *testing.T) {
 	tests := []struct {

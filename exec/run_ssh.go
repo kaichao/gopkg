@@ -24,8 +24,8 @@ type SSHConfig struct {
 	Background bool   // If true, run command in background and return PID
 }
 
-// DefaultSSHKeyPath returns the default SSH key path (~/.ssh/id_rsa) if it exists.
-func DefaultSSHKeyPath() (string, error) {
+// defaultSSHKeyPath returns the default SSH key path (~/.ssh/id_rsa) if it exists.
+func defaultSSHKeyPath() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("get home dir failed: %v", err)
@@ -39,6 +39,13 @@ func DefaultSSHKeyPath() (string, error) {
 
 // getAuthMethod returns the appropriate SSH authentication method based on config
 func getAuthMethod(config SSHConfig) (ssh.AuthMethod, error) {
+	if config.KeyPath == "" {
+		// Use default key path when KeyPath is explicitly empty
+		keyPath, err := defaultSSHKeyPath()
+		if err == nil {
+			config.KeyPath = keyPath
+		}
+	}
 	if config.KeyPath != "" {
 		key, err := os.ReadFile(config.KeyPath)
 		if err != nil {

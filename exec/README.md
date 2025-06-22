@@ -98,12 +98,13 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (code int, std
 ### SSHConfig Struct
 ```go
 type SSHConfig struct {
-    User     string // Required
-    Host     string // Required
-    Port     int    // Default 22
-    KeyPath  string // Preferred over password
-    Password string 
-    Timeout  int    // Connection timeout (seconds)
+    User       string // Required
+    Host       string // Required
+    Port       int    // Default 22
+    KeyPath    string // Preferred over password
+    Password   string 
+    Timeout    int    // Connection timeout (seconds)
+    Background bool   // Run command in background
 }
 ```
 
@@ -165,10 +166,18 @@ defer func() {
 syscall.Kill(-pid, syscall.SIGTERM)
 ```
 
-### Long-running Processes
+### Background Processes
 ```go
-// Run in background and get PID
-_, pid, _, _ := RunSSHCommand(config, "nohup long-running-cmd & echo $!", 10)
+// Run command in background mode
+config := exec.SSHConfig{
+    Host: "10.0.0.1",
+    User: "admin",
+    Background: true, // Enable background execution
+    // ... other config
+}
+
+// Returns PID immediately while process continues running
+_, pid, _, _ := exec.RunSSHCommand(config, "long-running-command", 0)
 ```
 
 ## FAQ

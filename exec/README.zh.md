@@ -22,7 +22,7 @@
 - **完整输出捕获**: 同步获取标准输出、错误流和退出码
 - **灵活超时控制**: 支持命令级和连接级超时设置
 - **多认证方式**: SSH支持密钥、密码和代理转发
-- **进程管理**: 支持后台进程和进程组管理
+- **进程管理**: 支持后台进程执行(PID返回)和进程组管理
 
 ## 典型场景
 
@@ -98,12 +98,13 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (code int, std
 ### SSHConfig结构体
 ```go
 type SSHConfig struct {
-    User     string // 必须
-    Host     string // 必须
-    Port     int    // 默认22
-    KeyPath  string // 优先于密码
-    Password string 
-    Timeout  int    // 连接超时(秒)
+    User       string // 必须
+    Host       string // 必须
+    Port       int    // 默认22
+    KeyPath    string // 优先于密码
+    Password   string 
+    Timeout    int    // 连接超时(秒)
+    Background bool   // 后台运行命令
 }
 ```
 
@@ -165,10 +166,18 @@ defer func() {
 syscall.Kill(-pid, syscall.SIGTERM)
 ```
 
-### 长进程管理
+### 后台进程管理
 ```go
-// 后台运行并获取PID
-_, pid, _, _ := RunSSHCommand(config, "nohup long-running-cmd & echo $!", 10)
+// 使用Background模式运行后台进程
+config := exec.SSHConfig{
+    Host: "10.0.0.1",
+    User: "admin",
+    Background: true, // 启用后台执行模式
+    // ... 其他配置
+}
+
+// 立即返回PID，进程继续在后台运行
+_, pid, _, _ := exec.RunSSHCommand(config, "long-running-command", 0)
 ```
 
 ## 常见问题
