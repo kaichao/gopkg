@@ -98,7 +98,8 @@ func wrapCommand(command string) (string, string) {
 	// Simplified and reliable background execution
 	wrapped := `
 		# Enhanced background execution with process tracking
-		tmp_script=$(mktemp)
+		mkdir -p ${HOME}/tmp
+		tmp_script=$(mktemp -p ${HOME}/tmp)
 		chmod +x $tmp_script
 		cat > $tmp_script <<'EOF'
 #!/bin/bash
@@ -109,16 +110,16 @@ trap '' HUP INT TERM
 real_pid=$!
 echo "DEBUG: Real PID: $real_pid" >&2
 ps -fp $real_pid >&2
-echo $real_pid > /tmp/real_pid
+echo $real_pid > ${HOME}/tmp/real_pid
 wait $real_pid
 EOF
-		nohup $tmp_script >/tmp/nohup.out 2>&1 &
+		nohup $tmp_script >${HOME}/tmp/nohup.out 2>&1 &
 		pid=$!
 		disown $pid
 		echo "DEBUG: Wrapper PID: $pid" >&2
 		sleep 1
-		if [ -f /tmp/real_pid ]; then
-			pid=$(cat /tmp/real_pid)
+		if [ -f ${HOME}/tmp/real_pid ]; then
+			pid=$(cat ${HOME}/tmp/real_pid)
 			echo "DEBUG: Using real PID: $pid" >&2
 		fi
 		
@@ -129,7 +130,7 @@ EOF
 		   [ -d /proc/$pid ] || \
 		   pgrep -P $pid >/dev/null 2>&1; then
 			# Output clean results (skip debug info)
-			grep -v '^DEBUG:' /tmp/nohup.out || true
+			grep -v '^DEBUG:' ${HOME}/tmp/nohup.out || true
 			# Then output PID info
 			echo "$pid"
 			echo "$pid ` + marker + `"
@@ -139,13 +140,13 @@ EOF
 			[ -d /proc/$pid ] && echo "/proc/$pid exists" >&2 || true
 		else
 			echo "Process failed to start"
-			cat /tmp/nohup.out
+			cat ${HOME}/tmp/nohup.out
 			echo "0"
 			echo "0 ` + marker + `"
 		fi
 		
 		# Cleanup
-		rm -f $tmp_script /tmp/nohup.out
+		rm -f $tmp_script ${HOME}/tmp/nohup.out ${HOME}/tmp/real_pid
 		exit 0`
 	return wrapped, marker
 }
