@@ -22,6 +22,7 @@ type SSHConfig struct {
 	KeyPath    string // Path to private key file, empty for default (~/.ssh/id_rsa)
 	Password   string // Optional, if using password auth
 	Background bool   // If true, run command in background and return PID
+	UseHomeTmp bool   // If true, use ${HOME}/tmp instead of /tmp for temporary files
 }
 
 // defaultSSHKeyPath returns the default SSH key path (~/.ssh/id_rsa) if it exists.
@@ -93,13 +94,18 @@ func createSSHClient(config SSHConfig, timeout int) (*ssh.Client, context.Contex
 }
 
 // wrapCommand creates a wrapped command for background execution
-func wrapCommand(command string) (string, string) {
+// useHomeTmp controls whether to use ${HOME}/tmp (true) or /tmp (false)
+func wrapCommand(command string, useHomeTmp bool) (string, string) {
 	marker := fmt.Sprintf("MARKER_%d", time.Now().UnixNano())
 	// Simplified and reliable background execution
 	wrapped := `
 		# Enhanced background execution with process tracking
-		mkdir -p ${HOME}/tmp
-		tmp_script=$(mktemp -p ${HOME}/tmp)
+		tmp_dir="/tmp"
+		if ` + fmt.Sprintf("%t", useHomeTmp) + `; then
+			mkdir -p ${HOME}/tmp
+			tmp_dir="${HOME}/tmp"
+		fi
+		tmp_script=$(mktemp -p $tmp_dir)
 		chmod +x $tmp_script
 		cat > $tmp_script <<'EOF'
 #!/bin/bash
@@ -110,7 +116,7 @@ trap '' HUP INT TERM
 real_pid=$!
 echo "DEBUG: Real PID: $real_pid" >&2
 ps -fp $real_pid >&2
-echo $real_pid > ${HOME}/tmp/real_pid
+		echo $real_pid > $tmp_dir/real_pid
 wait $real_pid
 EOF
 		nohup $tmp_script >${HOME}/tmp/nohup.out 2>&1 &
@@ -118,8 +124,8 @@ EOF
 		disown $pid
 		echo "DEBUG: Wrapper PID: $pid" >&2
 		sleep 1
-		if [ -f ${HOME}/tmp/real_pid ]; then
-			pid=$(cat ${HOME}/tmp/real_pid)
+		if [ -f $tmp_dir/real_pid ]; then
+			pid=$(cat $tmp_dir/real_pid)
 			echo "DEBUG: Using real PID: $pid" >&2
 		fi
 		
@@ -146,7 +152,7 @@ EOF
 		fi
 		
 		# Cleanup
-		rm -f $tmp_script ${HOME}/tmp/nohup.out ${HOME}/tmp/real_pid
+		rm -f $tmp_script $tmp_dir/nohup.out $tmp_dir/real_pid
 		exit 0`
 	return wrapped, marker
 }
@@ -237,7 +243,7 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 	var exitCode int
 
 	if config.Background {
-		wrappedCmd, marker := wrapCommand(command)
+		wrappedCmd, marker := wrapCommand(command, config.UseHomeTmp)
 		stdoutBuf, stderrBuf, wg = captureOutput(session)
 
 		if err := session.Start(wrappedCmd); err != nil {
