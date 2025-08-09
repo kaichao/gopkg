@@ -171,6 +171,10 @@ func captureOutput(session *ssh.Session) (*bytes.Buffer, *bytes.Buffer, *sync.Wa
 
 // cleanupProcesses performs thorough cleanup of remote processes
 func cleanupProcesses(client *ssh.Client, command string, marker string) error {
+	if client == nil {
+		return nil
+	}
+
 	cleanupCmds := []string{
 		fmt.Sprintf("pkill -9 -f '%s'", command),
 		fmt.Sprintf("pkill -9 -f '%s'", marker),
@@ -179,7 +183,10 @@ func cleanupProcesses(client *ssh.Client, command string, marker string) error {
 	}
 
 	for _, cmd := range cleanupCmds {
-		session, _ := client.NewSession()
+		session, err := client.NewSession()
+		if err != nil {
+			continue
+		}
 		_ = session.Run(cmd)
 		session.Close()
 		time.Sleep(300 * time.Millisecond)
@@ -236,7 +243,11 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 	if err != nil {
 		return 125, "", "", fmt.Errorf("ssh: create session failed: %w", err)
 	}
-	defer session.Close()
+	defer func() {
+		if session != nil {
+			session.Close()
+		}
+	}()
 
 	var stdoutBuf, stderrBuf *bytes.Buffer
 	var wg *sync.WaitGroup
