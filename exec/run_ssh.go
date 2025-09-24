@@ -99,17 +99,27 @@ type SSHConfig struct {
 	UseHomeTmp bool   // If true, use ${HOME}/tmp instead of /tmp for temporary files
 }
 
-// defaultSSHKeyPath returns the default SSH key path (~/.ssh/id_rsa) if it exists.
+// defaultSSHKeyPath returns the default SSH key path, preferring id_ed25519 over id_rsa.
 func defaultSSHKeyPath() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("get home dir failed: %v", err)
 	}
-	keyPath := filepath.Join(homeDir, ".ssh", "id_rsa")
-	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("default key path %s does not exist", keyPath)
+
+	// Try common SSH key locations in order of preference
+	keyPaths := []string{
+		filepath.Join(homeDir, ".ssh", "id_ed25519"), // Preferred: more secure and faster
+		filepath.Join(homeDir, ".ssh", "id_rsa"),     // Fallback: traditional RSA key
+		filepath.Join(homeDir, ".ssh", "id_ecdsa"),   // Alternative: ECDSA key
 	}
-	return keyPath, nil
+
+	for _, keyPath := range keyPaths {
+		if _, err := os.Stat(keyPath); err == nil {
+			return keyPath, nil
+		}
+	}
+
+	return "", fmt.Errorf("no default SSH key found in %s/.ssh/ (tried: id_ed25519, id_rsa, id_ecdsa)", homeDir)
 }
 
 // getAuthMethod returns the appropriate SSH authentication method based on config
