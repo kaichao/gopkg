@@ -9,11 +9,22 @@ import (
 )
 
 // InsertReturningID 插入数据并返回插入行的 ID
-func InsertReturningID(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, returningColumn ...string) ([]int, error) {
+// 参数说明：
+//   - returningColumnAndOnConflict: 可变长参数
+//   - 如果提供0个参数：使用默认返回列 "id"
+//   - 如果提供1个参数：第一个参数为返回列名
+//   - 如果提供2个参数：第一个参数为返回列名，第二个参数为ON CONFLICT子句
+func InsertReturningID(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, returningColumnAndOnConflict ...string) ([]int, error) {
 	// 默认返回的列名为 "id"
 	returning := "id"
-	if len(returningColumn) > 0 {
-		returning = returningColumn[0]
+	if len(returningColumnAndOnConflict) > 0 {
+		returning = returningColumnAndOnConflict[0]
+	}
+
+	// 检查是否有ON CONFLICT子句
+	onConflict := ""
+	if len(returningColumnAndOnConflict) > 1 {
+		onConflict = returningColumnAndOnConflict[1]
 	}
 
 	// 构建 VALUES 部分
@@ -27,8 +38,13 @@ func InsertReturningID(conn *pgx.Conn, sqlTemplate string, data [][]interface{},
 	}
 	valuesClause := strings.Join(valuePlaceholders, ",")
 
-	// 构建完整的 SQL 语句，包含 RETURNING 子句
-	fullSQL := fmt.Sprintf("%s VALUES %s RETURNING %s", sqlTemplate, valuesClause, returning)
+	// 构建完整的 SQL 语句
+	var fullSQL string
+	if onConflict != "" {
+		fullSQL = fmt.Sprintf("%s VALUES %s %s RETURNING %s", sqlTemplate, valuesClause, onConflict, returning)
+	} else {
+		fullSQL = fmt.Sprintf("%s VALUES %s RETURNING %s", sqlTemplate, valuesClause, returning)
+	}
 
 	// 准备参数
 	var args []interface{}
