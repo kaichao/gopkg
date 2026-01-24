@@ -18,6 +18,12 @@ Database caching layer via [go-cache](https://github.com/patrickmn/go-cache), su
 ### 4. `exec`
 Cross-environment command executor (local/SSH) with stdout/stderr capture.
 
+### 5. `errors`
+Enhanced error handling with tracing, context, error codes, and standard `errors` package compatibility.
+
+### 6. `logger`
+Structured logging for traced errors with sensitive data filtering and production-safe logging.
+
 
 ## License
 
