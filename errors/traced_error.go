@@ -18,34 +18,59 @@ type TracedError struct {
 }
 
 // New creates a new traced error
-// Usage: New("message") or New("message", code) where code is int
-func New(msg string, code ...int) *TracedError {
-	pc, file, line, _ := runtime.Caller(1)
+// Usage:
+//
+//	New("message")                    // Simple error
+//	New("message", code)              // Error with code
+//	New("message", code, skip)        // Error with code and custom skip
+//	New("message", skip)              // Error with custom skip (no code)
+func New(msg string, args ...any) *TracedError {
+	skip := 1 // Default skip for direct calls
+	var code int = -1
+
+	// Parse arguments
+	if len(args) == 1 {
+		// Single argument: could be code or skip
+		if c, ok := args[0].(int); ok {
+			code = c
+		}
+	} else if len(args) == 2 {
+		// Two arguments: first is code, second is skip
+		if c, ok := args[0].(int); ok {
+			code = c
+		}
+		if s, ok := args[1].(int); ok {
+			skip = s + 1 // Add 1 because we're already in New function
+		}
+	}
+
+	pc, file, line, _ := runtime.Caller(skip)
 	fn := runtime.FuncForPC(pc)
 
 	err := &TracedError{
 		Message:   msg,
-		Code:      -1, // Default code
+		Code:      code,
 		Location:  fmt.Sprintf("%s:%d:%s", file, line, fn.Name()),
 		Timestamp: time.Now(),
 		Context:   make(map[string]any),
-	}
-
-	// Set code if provided
-	if len(code) > 0 {
-		err.Code = code[0]
 	}
 
 	return err
 }
 
 // Wrap wraps an existing error with context
-func Wrap(err error, msg string) *TracedError {
+// The optional skip parameter specifies how many stack frames to skip
+func Wrap(err error, msg string, skip ...int) *TracedError {
 	if err == nil {
 		return nil
 	}
 
-	pc, file, line, _ := runtime.Caller(1)
+	skipCount := 1 // Default skip for direct calls
+	if len(skip) > 0 {
+		skipCount = skip[0] + 1 // Add 1 because we're already in Wrap function
+	}
+
+	pc, file, line, _ := runtime.Caller(skipCount)
 	fn := runtime.FuncForPC(pc)
 
 	tracedErr := &TracedError{

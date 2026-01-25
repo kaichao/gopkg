@@ -46,8 +46,8 @@ func E(args ...any) error {
 		startIdx = 1
 	}
 
-	// Create error with code
-	err := New(msg, code)
+	// Create error with code, skip 1 for E function
+	err := New(msg, code, 1)
 
 	// Process key-value pairs
 	for i := startIdx; i < len(args); i += 2 {
@@ -114,8 +114,8 @@ func WrapE(err error, args ...any) error {
 		startIdx = 1
 	}
 
-	// Create wrapped error
-	wrapped := Wrap(err, msg)
+	// Create wrapped error, skip 1 for WrapE function
+	wrapped := Wrap(err, msg, 1)
 	if code != -1 {
 		wrapped.Code = code
 	}
