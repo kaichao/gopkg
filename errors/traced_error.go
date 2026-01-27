@@ -14,7 +14,7 @@ type TracedError struct {
 	Location  string         // Where it happened (file:line:function)
 	Timestamp time.Time      // When it happened
 	Context   map[string]any // Context information
-	Cause     *TracedError   // Underlying cause
+	cause     error          // Underlying cause (private, can be any error type)
 }
 
 // New creates a new traced error
@@ -78,11 +78,7 @@ func Wrap(err error, msg string, skip ...int) *TracedError {
 		Location:  fmt.Sprintf("%s:%d:%s", file, line, fn.Name()),
 		Timestamp: time.Now(),
 		Context:   make(map[string]any),
-	}
-
-	// If it's already a TracedError, preserve the chain
-	if te, ok := err.(*TracedError); ok {
-		tracedErr.Cause = te
+		cause:     err, // Save the original error
 	}
 
 	return tracedErr
@@ -118,9 +114,13 @@ func (e *TracedError) Format() string {
 	}
 
 	// Recursively print cause chain
-	if e.Cause != nil {
+	if cause := e.Cause(); cause != nil {
 		sb.WriteString("\nCaused by:\n")
-		sb.WriteString(e.Cause.Format())
+		sb.WriteString(cause.Format())
+	} else if e.cause != nil {
+		// Print non-TracedError cause
+		sb.WriteString("\nCaused by:\n")
+		sb.WriteString(fmt.Sprintf("  %v\n", e.cause))
 	}
 
 	return sb.String()
@@ -131,20 +131,32 @@ func (e *TracedError) GetFullChain() []*TracedError {
 	chain := []*TracedError{e}
 
 	current := e
-	for current.Cause != nil {
-		chain = append(chain, current.Cause)
-		current = current.Cause
+	for {
+		cause := current.Cause()
+		if cause == nil {
+			break
+		}
+		chain = append(chain, cause)
+		current = cause
 	}
 
 	return chain
 }
 
-// Unwrap returns the underlying cause (for errors.Is/As)
-func (e *TracedError) Unwrap() error {
-	if e.Cause != nil {
-		return e.Cause
+// Cause returns the underlying TracedError cause (for backward compatibility)
+func (e *TracedError) Cause() *TracedError {
+	if e.cause == nil {
+		return nil
+	}
+	if te, ok := e.cause.(*TracedError); ok {
+		return te
 	}
 	return nil
+}
+
+// Unwrap returns the underlying cause (for errors.Is/As)
+func (e *TracedError) Unwrap() error {
+	return e.cause
 }
 
 // Is checks if this error matches a target (for errors.Is)
@@ -153,7 +165,12 @@ func (e *TracedError) Is(target error) bool {
 		return e == nil
 	}
 
-	// Check if target is a TracedError
+	// Check if it's the same instance
+	if te, ok := target.(*TracedError); ok && e == te {
+		return true
+	}
+
+	// Check if target is a TracedError for semantic equality
 	if te, ok := target.(*TracedError); ok {
 		// Match by code if both have codes (and codes are not default -1)
 		if e.Code != -1 && te.Code != -1 {
@@ -163,15 +180,31 @@ func (e *TracedError) Is(target error) bool {
 		return e.Message == te.Message
 	}
 
-	// Support standard error comparison
-	return e.Message == target.Error()
+	// Don't handle other specific error types - let the standard library handle them
+	return false
 }
 
 // As checks if this error can be converted to target (for errors.As)
 func (e *TracedError) As(target any) bool {
-	if te, ok := target.(**TracedError); ok {
-		*te = e
+	if target == nil {
+		return false
+	}
+
+	// Use type assertion with reflection for safety
+	switch t := target.(type) {
+	case **TracedError:
+		if t == nil {
+			return false
+		}
+		*t = e
+		return true
+	case *error:
+		if t == nil {
+			return false
+		}
+		*t = e
 		return true
 	}
+
 	return false
 }

@@ -85,13 +85,11 @@ value := errors.MustValue(someOperation())
 
 ### Error Code Utilities
 ```go
-// Check error code
-if errors.IsCode(err, 404) {
-    // Handle 404 error
-}
-
 // Get error code
 code := errors.GetCode(err)
+if code == 404 {
+    // Handle 404 error
+}
 ```
 
 ## Error Chains
@@ -142,7 +140,7 @@ cause := errors.Unwrap(err)
 2. **Add context** to errors for better debugging
 3. **Wrap errors** to preserve error chains
 4. **Use E() and WrapE()** for concise error creation
-5. **Check error codes** with IsCode() instead of string matching
+5. **Check error codes** with GetCode() instead of string matching
 
 ## Examples
 

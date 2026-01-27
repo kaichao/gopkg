@@ -74,7 +74,7 @@ func TestWrapE(t *testing.T) {
 		t.Fatal("WrapE should return TracedError")
 	}
 
-	if te.Cause != original {
+	if te.Cause() != original {
 		t.Error("WrapE should preserve cause chain")
 	}
 
@@ -162,29 +162,6 @@ func TestMustValue(t *testing.T) {
 
 	err := errors.New("test error")
 	errors.MustValue(42, err)
-}
-
-func TestIsCode(t *testing.T) {
-	// Test with coded error
-	err := errors.New("test error", 1001)
-	if !errors.IsCode(err, 1001) {
-		t.Error("IsCode should return true for matching code")
-	}
-
-	if errors.IsCode(err, 1002) {
-		t.Error("IsCode should return false for non-matching code")
-	}
-
-	// Test with non-coded error (default code -1)
-	err2 := errors.New("test error")
-	if errors.IsCode(err2, 1001) {
-		t.Error("IsCode should return false for errors without code")
-	}
-
-	// Test with nil error
-	if errors.IsCode(nil, 1001) {
-		t.Error("IsCode should return false for nil error")
-	}
 }
 
 func TestGetCode(t *testing.T) {

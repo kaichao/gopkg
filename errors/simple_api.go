@@ -150,19 +150,6 @@ func MustValue[T any](value T, err error) T {
 	return value
 }
 
-// IsCode checks if error has the specified code
-func IsCode(err error, code int) bool {
-	if err == nil {
-		return false
-	}
-
-	if te, ok := err.(*TracedError); ok {
-		return te.Code == code
-	}
-
-	return false
-}
-
 // GetCode returns the error code if available
 func GetCode(err error) int {
 	if err == nil {

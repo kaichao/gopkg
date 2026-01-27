@@ -48,7 +48,7 @@ func TestWrap(t *testing.T) {
 		t.Fatal("Wrap should return non-nil error")
 	}
 
-	if wrapped.Cause != original {
+	if wrapped.Cause() != original {
 		t.Error("Wrap should preserve cause chain")
 	}
 
@@ -167,10 +167,9 @@ func TestIs(t *testing.T) {
 		t.Error("Is should return false for errors with different codes")
 	}
 
-	// Test with standard errors
-	stdErr := errors.New("test error")
-	if !err1.Is(stdErr) {
-		t.Error("Is should work with standard errors")
+	// Test instance equality
+	if !err1.Is(err1) {
+		t.Error("Is should return true for same instance")
 	}
 }
 
