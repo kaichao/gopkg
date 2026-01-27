@@ -1,6 +1,9 @@
 package errors
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // E is a shorthand for creating errors with context
 // Usage:
@@ -161,4 +164,25 @@ func GetCode(err error) int {
 	}
 
 	return -1
+}
+
+// Is reports whether any error in err's chain matches target.
+// It wraps the standard library's errors.Is function.
+func Is(err, target error) bool {
+	return errors.Is(err, target)
+}
+
+// As finds the first error in err's chain that matches target, and if so, sets
+// target to that error value and returns true. Otherwise, it returns false.
+// It wraps the standard library's errors.As function.
+func As(err error, target any) bool {
+	return errors.As(err, target)
+}
+
+// Unwrap returns the result of calling the Unwrap method on err, if err's
+// type contains an Unwrap method returning error.
+// Otherwise, Unwrap returns nil.
+// It wraps the standard library's errors.Unwrap function.
+func Unwrap(err error) error {
+	return errors.Unwrap(err)
 }
