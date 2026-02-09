@@ -74,6 +74,51 @@ err := errors.New("auth failed").
 logger.SimpleLog(err, entry)
 ```
 
+### Default Logger Functions (Simplified API)
+For simpler usage, the package provides default logger functions that don't require passing a `logrus.Entry`.
+
+```go
+// Set the default logger (optional, called automatically with sensible defaults)
+func SetDefaultLogger(logger *logrus.Logger)
+
+// Log using default logger
+func LogTracedErrorDefault(err error, level ...logrus.Level)
+func SimpleLogDefault(err error, level ...logrus.Level)
+```
+
+**Features:**
+- No need to create or pass `logrus.Entry`
+- Uses package-level default logger
+- Same functionality as regular functions
+- Backward compatible
+
+**Usage:**
+```go
+import (
+    "github.com/kaichao/gopkg/errors"
+    "github.com/kaichao/gopkg/logger"
+)
+
+// Optionally configure default logger (once at app startup)
+logger.SetDefaultLogger(myCustomLogger)
+
+// Create error
+err := errors.New("file not found").
+    WithContext("filename", "data.txt")
+
+// Simple logging with default logger
+logger.LogTracedErrorDefault(err)
+
+// Or with custom level
+logger.SimpleLogDefault(err, logrus.WarnLevel)
+```
+
+**Default Configuration:**
+If `SetDefaultLogger` is not called, a default logger is automatically created with:
+- Output: `os.Stderr`
+- Formatter: `logrus.TextFormatter` with full timestamps
+- Level: `logrus.InfoLevel`
+
 ## Sensitive Data Filtering
 
 ### IsSensitiveKey

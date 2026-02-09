@@ -3,7 +3,9 @@ package logger
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
 
 	"github.com/kaichao/gopkg/errors"
 
@@ -132,4 +134,47 @@ func NewJSONTestEntry() (*logrus.Entry, *bytes.Buffer) {
 		DisableTimestamp: true,
 	})
 	return logrus.NewEntry(log), &buf
+}
+
+// defaultLogger is the package-level default logger
+var (
+	defaultLogger     *logrus.Logger
+	defaultLoggerOnce sync.Once
+)
+
+// init initializes the default logger
+func init() {
+	defaultLoggerOnce.Do(func() {
+		defaultLogger = logrus.New()
+		defaultLogger.SetOutput(os.Stderr)
+		defaultLogger.SetFormatter(&logrus.TextFormatter{
+			FullTimestamp: true,
+		})
+	})
+}
+
+// SetDefaultLogger sets the package-level default logger
+// This should be called early in the application initialization
+func SetDefaultLogger(logger *logrus.Logger) {
+	if logger == nil {
+		return
+	}
+	defaultLogger = logger
+}
+
+// getDefaultEntry returns a logrus.Entry using the default logger
+func getDefaultEntry() *logrus.Entry {
+	return logrus.NewEntry(defaultLogger)
+}
+
+// LogTracedErrorDefault logs traced errors using the default logger
+// level specifies the log level for the outermost error (inner errors are logged as Debug)
+func LogTracedErrorDefault(err error, level ...logrus.Level) {
+	LogTracedError(err, getDefaultEntry(), level...)
+}
+
+// SimpleLogDefault logs errors using the default logger with sensitive data filtering
+// level specifies the log level (defaults to ErrorLevel)
+func SimpleLogDefault(err error, level ...logrus.Level) {
+	SimpleLog(err, getDefaultEntry(), level...)
 }

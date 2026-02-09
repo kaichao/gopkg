@@ -157,3 +157,110 @@ func ExampleLogTracedError_productionVsDevelopment() {
 
 	// In production, sensitive data like api_key is filtered out
 }
+
+func ExampleLogTracedErrorDefault() {
+	// Setup a custom logger (optional)
+	var buf bytes.Buffer
+	customLogger := logrus.New()
+	customLogger.SetOutput(&buf)
+	customLogger.SetFormatter(&logrus.TextFormatter{
+		DisableTimestamp: true,
+	})
+
+	// Set as default logger (once at application startup)
+	logger.SetDefaultLogger(customLogger)
+
+	// Create a traced error
+	err := errors.New("file not found").
+		WithContext("filename", "data.txt").
+		WithContext("user", "john_doe")
+
+	// Log the error using default logger (no need to pass logrus.Entry)
+	logger.LogTracedErrorDefault(err)
+
+	fmt.Println("Error logged with default logger")
+	// Check buf.String() for the actual log output
+}
+
+func ExampleSimpleLogDefault() {
+	// Setup a custom logger with JSON format
+	var buf bytes.Buffer
+	customLogger := logrus.New()
+	customLogger.SetOutput(&buf)
+	customLogger.SetFormatter(&logrus.JSONFormatter{
+		DisableTimestamp: true,
+	})
+
+	// Set as default logger
+	logger.SetDefaultLogger(customLogger)
+
+	// Create error with sensitive data
+	err := errors.New("authentication failed").
+		WithContext("username", "john_doe").
+		WithContext("password", "secret123"). // This will be filtered
+		WithContext("attempt", 3)
+
+	// SimpleLogDefault filters sensitive data using default logger
+	logger.SimpleLogDefault(err)
+
+	fmt.Println("Error logged with default logger and sensitive data filtered")
+}
+
+func ExampleLogTracedErrorDefault_withLevel() {
+	// Setup logger
+	var buf bytes.Buffer
+	log := logrus.New()
+	log.SetOutput(&buf)
+	log.SetFormatter(&logrus.TextFormatter{
+		DisableTimestamp: true,
+	})
+
+	// Set as default logger
+	logger.SetDefaultLogger(log)
+
+	err := errors.New("permission denied", 403).
+		WithContext("resource", "/api/data").
+		WithContext("user_id", 12345)
+
+	// Log with Warn level using default logger
+	logger.LogTracedErrorDefault(err, logrus.WarnLevel)
+
+	fmt.Println("Error logged at Warn level using default logger")
+}
+
+func ExampleSimpleLogDefault_withLevel() {
+	// Setup logger
+	var buf bytes.Buffer
+	log := logrus.New()
+	log.SetOutput(&buf)
+	log.SetFormatter(&logrus.TextFormatter{
+		DisableTimestamp: true,
+	})
+
+	// Set as default logger
+	logger.SetDefaultLogger(log)
+
+	err := errors.New("validation error", 400).
+		WithContext("field", "email").
+		WithContext("value", "invalid@example")
+
+	// Log at Info level using default logger
+	logger.SimpleLogDefault(err, logrus.InfoLevel)
+
+	fmt.Println("Validation error logged at Info level using default logger")
+}
+
+func ExampleLogTracedErrorDefault_automatic() {
+	// No need to call SetDefaultLogger() - package automatically creates a default logger
+
+	// Create error
+	err := errors.New("network timeout").
+		WithContext("host", "api.example.com").
+		WithContext("timeout", "30s")
+
+	// Log using default logger (automatically created)
+	logger.LogTracedErrorDefault(err)
+
+	fmt.Println("Error logged using automatically created default logger")
+	// Output goes to os.Stderr by default
+}
