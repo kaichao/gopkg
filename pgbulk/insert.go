@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/kaichao/gopkg/errors"
 )
 
 // Insert 使用提供的 SQL 模板和数据将数据插入数据库
@@ -47,9 +48,5 @@ func Insert(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, onConflict
 
 	// 执行 SQL 语句
 	_, err := conn.Exec(context.Background(), fullSQL, args...)
-	if err != nil {
-		return fmt.Errorf("插入失败: %w", err)
-	}
-
-	return nil
+	return errors.WrapE(err, "pgx insert", "sql-template", sqlTemplate)
 }

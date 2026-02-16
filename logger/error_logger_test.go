@@ -2,6 +2,8 @@ package logger_test
 
 import (
 	"bytes"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/kaichao/gopkg/errors"
@@ -77,6 +79,37 @@ func TestLogTracedErrorChain(t *testing.T) {
 	}
 	if !contains(output, "Caused by") {
 		t.Error("Cause chain should be indicated")
+	}
+}
+
+func TestLogTracedErrorMixedChain(t *testing.T) {
+	entry, buf := logger.NewTestEntry()
+	entry.Logger.SetLevel(logrus.DebugLevel) // Enable debug logging for chain
+
+	// Create mixed error chain with standard error at root
+	stdErr := fmt.Errorf("standard library error")
+	wrapped := errors.Wrap(stdErr, "wrapped error")
+
+	// Log the error chain
+	logger.LogTracedError(wrapped, entry)
+
+	output := buf.String()
+
+	// Check that both errors are logged
+	if !contains(output, "wrapped error") {
+		t.Error("Outer error should be logged")
+	}
+	if !contains(output, "standard library error") {
+		t.Error("Standard error at root should be logged (in debug)")
+	}
+	if !contains(output, "Caused by") {
+		t.Error("Cause chain should be indicated")
+	}
+
+	// Count log lines (should be 2: error + debug)
+	lines := strings.Count(output, "\n")
+	if lines != 2 {
+		t.Errorf("Expected 2 log lines, got %d", lines)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	pgx "github.com/jackc/pgx/v5"
+	"github.com/kaichao/gopkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -34,10 +35,9 @@ func Copy(conn *pgx.Conn, sqlTemplate string, data [][]interface{}) (int, error)
 		pgx.CopyFromRows(data),
 	)
 	if err != nil {
-		logrus.Errorf("COPY execution error: %v", err)
-		return 0, err
+		return 0, errors.WrapE(err, "pgx.CopyFrom", "sql-template", sqlTemplate)
 	}
 
-	logrus.Infof("Total copied: %d rows.", copyCount)
+	logrus.Tracef("Total copied: %d rows.", copyCount)
 	return int(copyCount), nil
 }

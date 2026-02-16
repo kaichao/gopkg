@@ -24,38 +24,67 @@ func LogTracedError(err error, log *logrus.Entry, level ...logrus.Level) {
 		logLevel = level[0]
 	}
 
-	// If it's a traced error, log with full details
-	if tracedErr, ok := err.(*errors.TracedError); ok {
-		chain := tracedErr.GetFullChain()
+	// Collect full error chain using Unwrap()
+	chain := collectErrorChain(err)
 
-		for i, errInChain := range chain {
+	for i, errInChain := range chain {
+		// Check if it's a TracedError
+		if tracedErr, ok := errInChain.(*errors.TracedError); ok {
 			fields := logrus.Fields{
 				"error_level": i, // 0 = outermost error
-				"location":    errInChain.Location,
-				"timestamp":   errInChain.Timestamp,
+				"location":    tracedErr.Location,
+				"timestamp":   tracedErr.Timestamp,
 			}
 
 			// Add error code if available (only if not default -1)
-			if errInChain.Code != -1 {
-				fields["error_code"] = errInChain.Code
+			if tracedErr.Code != -1 {
+				fields["error_code"] = tracedErr.Code
 			}
 
 			// Add all context fields
-			for k, v := range errInChain.Context {
+			for k, v := range tracedErr.Context {
 				fields[fmt.Sprintf("ctx_%s", k)] = v
 			}
 
 			// Log at appropriate level
 			if i == 0 {
-				log.WithFields(fields).Log(logLevel, errInChain.Message)
+				log.WithFields(fields).Log(logLevel, tracedErr.Message)
 			} else {
-				log.WithFields(fields).Debug(fmt.Sprintf("Caused by: %s", errInChain.Message))
+				log.WithFields(fields).Debug(fmt.Sprintf("Caused by: %s", tracedErr.Message))
+			}
+		} else {
+			// Regular error in the chain
+			fields := logrus.Fields{
+				"error_level": i,
+			}
+
+			if i == 0 {
+				log.WithFields(fields).Log(logLevel, errInChain.Error())
+			} else {
+				log.WithFields(fields).Debug(fmt.Sprintf("Caused by: %s", errInChain.Error()))
 			}
 		}
-	} else {
-		// Regular error
-		log.WithError(err).Log(logLevel, "Operation failed")
 	}
+}
+
+// collectErrorChain collects the full error chain using Unwrap()
+func collectErrorChain(err error) []error {
+	var chain []error
+
+	current := err
+	for current != nil {
+		chain = append(chain, current)
+
+		// Try to unwrap the error
+		if unwrapper, ok := current.(interface{ Unwrap() error }); ok {
+			current = unwrapper.Unwrap()
+		} else {
+			// No more errors in the chain
+			break
+		}
+	}
+
+	return chain
 }
 
 // SimpleLog is a simplified version for production

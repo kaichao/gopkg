@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/kaichao/gopkg/errors"
 )
 
 // InsertReturningID 插入数据并返回插入行的 ID
@@ -55,7 +56,7 @@ func InsertReturningID(conn *pgx.Conn, sqlTemplate string, data [][]interface{},
 	// 执行 SQL 语句并获取返回的 ID
 	rows, err := conn.Query(context.Background(), fullSQL, args...)
 	if err != nil {
-		return nil, fmt.Errorf("插入失败: %w", err)
+		return nil, errors.WrapE(err, "insert", "full-sql", fullSQL)
 	}
 	defer rows.Close()
 
@@ -63,13 +64,13 @@ func InsertReturningID(conn *pgx.Conn, sqlTemplate string, data [][]interface{},
 	for rows.Next() {
 		var id int
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("扫描返回的 ID 失败: %w", err)
+			return nil, errors.WrapE(err, " rows.Scan()")
 		}
 		ids = append(ids, id)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("读取行失败: %w", err)
+		return nil, errors.WrapE(err, " rows.Next()")
 	}
 
 	return ids, nil

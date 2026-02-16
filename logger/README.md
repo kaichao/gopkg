@@ -22,19 +22,23 @@ func LogTracedError(err error, log *logrus.Entry, level ...logrus.Level)
 
 **Features:**
 - Logs complete error chain (outermost error + all causes)
-- Includes location, timestamp, and context for each error in chain
+- **Includes both TracedError and standard Go errors in the chain**
+- Includes location, timestamp, and context for each TracedError in chain
+- Standard errors are logged with basic information (error message only)
 - Inner errors are logged at Debug level
 - Supports custom log levels
 
 **Usage:**
 ```go
 import (
+    "fmt"
+    
     "github.com/kaichao/gopkg/errors"
     "github.com/kaichao/gopkg/logger"
     "github.com/sirupsen/logrus"
 )
 
-// Create error with chain
+// Create pure TracedError chain
 root := errors.New("database error").WithContext("query", "SELECT * FROM users")
 wrapped := errors.Wrap(root, "query failed")
 
@@ -47,6 +51,13 @@ logger.LogTracedError(wrapped, entry)
 
 // Log with custom level
 logger.LogTracedError(wrapped, entry, logrus.WarnLevel)
+
+// Create mixed error chain (TracedError + standard errors)
+stdErr := fmt.Errorf("standard library: file not found")
+mixedWrapped := errors.Wrap(stdErr, "operation failed").WithContext("filename", "data.txt")
+
+// LogTracedError will show both errors in the chain
+logger.LogTracedError(mixedWrapped, entry)
 ```
 
 ### SimpleLog

@@ -122,6 +122,36 @@ func ExampleLogTracedError_errorChain() {
 	fmt.Println("Full error chain logged")
 }
 
+func ExampleLogTracedError_mixedErrorChain() {
+	var buf bytes.Buffer
+	log := logrus.New()
+	log.SetOutput(&buf)
+	log.SetFormatter(&logrus.TextFormatter{
+		DisableTimestamp: true,
+	})
+	log.SetLevel(logrus.DebugLevel) // Enable debug to see full chain
+
+	entry := logrus.NewEntry(log)
+
+	// Create mixed error chain with standard library error at root
+	stdErr := fmt.Errorf("standard library: file not found")
+
+	// Wrap with TracedError
+	wrappedErr := errors.Wrap(stdErr, "operation failed").
+		WithContext("operation", "read_file").
+		WithContext("filename", "data.txt")
+
+	// Wrap again
+	topErr := errors.Wrap(wrappedErr, "request processing failed").
+		WithContext("request_id", "req-12345").
+		WithContext("user", "john_doe")
+
+	// LogTracedError will show the full chain including standard error
+	logger.LogTracedError(topErr, entry)
+
+	fmt.Println("Mixed error chain logged (includes standard errors)")
+}
+
 func ExampleLogTracedError_productionVsDevelopment() {
 	// In development: use LogTracedError for detailed debugging
 	var devBuf bytes.Buffer

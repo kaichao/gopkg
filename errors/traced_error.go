@@ -75,6 +75,7 @@ func Wrap(err error, msg string, skip ...int) *TracedError {
 
 	tracedErr := &TracedError{
 		Message:   fmt.Sprintf("%s: %v", msg, err),
+		Code:      -1, // Default code for wrapped errors
 		Location:  fmt.Sprintf("%s:%d:%s", file, line, fn.Name()),
 		Timestamp: time.Now(),
 		Context:   make(map[string]any),
