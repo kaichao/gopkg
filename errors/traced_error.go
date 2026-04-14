@@ -74,7 +74,7 @@ func Wrap(err error, msg string, skip ...int) *TracedError {
 	fn := runtime.FuncForPC(pc)
 
 	tracedErr := &TracedError{
-		Message:   fmt.Sprintf("%s: %v", msg, err),
+		Message:   fmt.Sprintf("%s: %s", msg, err),
 		Code:      -1, // Default code for wrapped errors
 		Location:  fmt.Sprintf("%s:%d:%s", file, line, fn.Name()),
 		Timestamp: time.Now(),
@@ -95,7 +95,10 @@ func (e *TracedError) WithContext(key string, value any) *TracedError {
 }
 
 // Error implements the error interface
+// Returns the error message, preserving original formatting including newlines
 func (e *TracedError) Error() string {
+	// Preserve the original message formatting including newlines and whitespace
+	// Don't trim or normalize whitespace
 	return e.Message
 }
 

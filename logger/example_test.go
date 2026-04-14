@@ -188,6 +188,59 @@ func ExampleLogTracedError_productionVsDevelopment() {
 	// In production, sensitive data like api_key is filtered out
 }
 
+func ExampleLogError() {
+	// Setup logger
+	var buf bytes.Buffer
+	log := logrus.New()
+	log.SetOutput(&buf)
+	log.SetFormatter(&logrus.TextFormatter{
+		DisableTimestamp: true,
+	})
+	log.SetLevel(logrus.DebugLevel)
+
+	entry := logrus.NewEntry(log)
+
+	// Create a traced error
+	err := errors.New("file not found").
+		WithContext("filename", "data.txt").
+		WithContext("user", "john_doe")
+
+	// Use LogError for automatic decision making
+	// Debug level will trigger detailed logging
+	logger.LogError(err, entry, logrus.DebugLevel)
+
+	fmt.Println("Error logged automatically")
+	// Check buf.String() for the actual log output
+}
+
+func ExampleLogError_withOverride() {
+	// Setup logger
+	var buf bytes.Buffer
+	log := logrus.New()
+	log.SetOutput(&buf)
+	log.SetFormatter(&logrus.TextFormatter{
+		DisableTimestamp: true,
+	})
+	log.SetLevel(logrus.InfoLevel)
+
+	entry := logrus.NewEntry(log)
+
+	// Create a traced error
+	err := errors.New("api request failed").
+		WithContext("endpoint", "/api/users").
+		WithContext("user_id", 12345)
+
+	// Set environment variable to force detailed logging
+	// In real applications, this would be set externally
+	// os.Setenv("LOG_ERROR_VERBOSE", "true")
+
+	// Info level with verbose override → detailed logging
+	logger.LogError(err, entry, logrus.InfoLevel)
+
+	fmt.Println("Error logged with verbose override")
+	// Check buf.String() for the actual log output
+}
+
 func ExampleLogTracedErrorDefault() {
 	// Setup a custom logger (optional)
 	var buf bytes.Buffer

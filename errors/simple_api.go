@@ -31,7 +31,7 @@ func E(args ...any) error {
 				startIdx = 2
 			} else {
 				// If second arg is not string, treat first arg as message
-				msg = fmt.Sprintf("%v", args[0])
+				msg = fmt.Sprintf("%s", args[0])
 				code = -1
 				startIdx = 1
 			}
@@ -44,7 +44,7 @@ func E(args ...any) error {
 		// First arg is message (string or any)
 		msg, _ = args[0].(string)
 		if msg == "" {
-			msg = fmt.Sprintf("%v", args[0])
+			msg = fmt.Sprintf("%s", args[0])
 		}
 		startIdx = 1
 	}
@@ -99,7 +99,7 @@ func WrapE(err error, args ...any) error {
 				startIdx = 2
 			} else {
 				// If second arg is not string, treat first arg as message
-				msg = fmt.Sprintf("%v", args[0])
+				msg = fmt.Sprintf("%s", args[0])
 				code = -1
 				startIdx = 1
 			}
@@ -112,7 +112,7 @@ func WrapE(err error, args ...any) error {
 		// First arg is message (string or any)
 		msg, _ = args[0].(string)
 		if msg == "" {
-			msg = fmt.Sprintf("%v", args[0])
+			msg = fmt.Sprintf("%s", args[0])
 		}
 		startIdx = 1
 	}

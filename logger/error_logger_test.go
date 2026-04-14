@@ -3,6 +3,7 @@ package logger_test
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -222,6 +223,83 @@ func TestIsSensitiveKey(t *testing.T) {
 
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || contains(s[1:], substr)))
+}
+
+func TestLogErrorAutoMode(t *testing.T) {
+	// Test auto mode behavior (no environment variable set)
+
+	// Test 1: Debug level should use detailed logging
+	entry, buf := logger.NewTestEntry()
+	entry.Logger.SetLevel(logrus.DebugLevel)
+	err := errors.New("debug error")
+	logger.LogError(err, entry, logrus.DebugLevel)
+	output := buf.String()
+	if !contains(output, "debug error") {
+		t.Error("Debug error should be logged")
+	}
+	if !contains(output, "location") {
+		t.Error("Debug level should use detailed logging with location")
+	}
+
+	// Test 2: Info level should use simple logging
+	entry2, buf2 := logger.NewJSONTestEntry()
+	err2 := errors.New("info error")
+	logger.LogError(err2, entry2, logrus.InfoLevel)
+	output2 := buf2.String()
+	if !contains(output2, "info error") {
+		t.Error("Info error should be logged")
+	}
+}
+
+func TestLogErrorVerboseOverride(t *testing.T) {
+	// Set environment variable to force verbose logging
+	os.Setenv("LOG_ERROR_VERBOSE", "true")
+	defer os.Unsetenv("LOG_ERROR_VERBOSE")
+
+	entry, buf := logger.NewTestEntry()
+	err := errors.New("error with verbose override")
+	logger.LogError(err, entry, logrus.InfoLevel) // Info level but should use detailed
+
+	output := buf.String()
+	if !contains(output, "location") {
+		t.Error("Verbose override should force detailed logging")
+	}
+}
+
+func TestLogErrorSimpleOverride(t *testing.T) {
+	// Set environment variable to force simple logging
+	os.Setenv("LOG_ERROR_VERBOSE", "false")
+	defer os.Unsetenv("LOG_ERROR_VERBOSE")
+
+	entry, buf := logger.NewTestEntry() // Use text formatter for easier testing
+	err := errors.New("error with simple override")
+	logger.LogError(err, entry, logrus.DebugLevel) // Debug level but should use simple
+
+	output := buf.String()
+	if !contains(output, "error with simple override") {
+		t.Error("Simple override should still log the error")
+	}
+}
+
+func TestLogErrorInvalidEnvValue(t *testing.T) {
+	// Set invalid environment variable value (should be ignored)
+	os.Setenv("LOG_ERROR_VERBOSE", "invalid_value")
+	defer os.Unsetenv("LOG_ERROR_VERBOSE")
+
+	// Should fall back to auto mode
+	entry, buf := logger.NewTestEntry()
+	entry.Logger.SetLevel(logrus.DebugLevel)
+	err := errors.New("error with invalid env")
+	logger.LogError(err, entry, logrus.DebugLevel) // Debug → detailed
+
+	output := buf.String()
+	if !contains(output, "error with invalid env") {
+		t.Error("Invalid env value should still log the error")
+	}
+	// In auto mode with Debug level, should use detailed logging
+	if !strings.Contains(output, "error_level") {
+		t.Error("Invalid env value should fall back to auto mode (detailed for debug)")
+	}
 }
 
 func TestLogTracedErrorDefault(t *testing.T) {

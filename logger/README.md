@@ -13,6 +13,22 @@ The `logger` package provides specialized logging functions for working with `Tr
 
 ## Core Functions
 
+### LogError (Recommended)
+Automatically chooses between detailed and simple logging based on log level.
+
+```go
+func LogError(err error, log *logrus.Entry, level ...logrus.Level)
+```
+
+**Features:**
+- **Automatic decision making**: DEBUG/TRACE → detailed, INFO/WARN/ERROR → simple
+- **Environment variable override**: 
+  - `LOG_ERROR_VERBOSE=true` forces detailed logging
+  - `LOG_ERROR_VERBOSE=false` forces simple logging
+  - Unset = auto mode (default)
+- **Same interface** as other logging functions
+- **Best practice** for most use cases
+
 ### LogTracedError
 Logs traced errors with full context and error chains.
 
@@ -27,6 +43,7 @@ func LogTracedError(err error, log *logrus.Entry, level ...logrus.Level)
 - Standard errors are logged with basic information (error message only)
 - Inner errors are logged at Debug level
 - Supports custom log levels
+- **Use for development debugging or when full details are needed**
 
 **Usage:**
 ```go

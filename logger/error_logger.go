@@ -46,11 +46,13 @@ func LogTracedError(err error, log *logrus.Entry, level ...logrus.Level) {
 				fields[fmt.Sprintf("ctx_%s", k)] = v
 			}
 
-			// Log at appropriate level
-			if i == 0 {
-				log.WithFields(fields).Log(logLevel, tracedErr.Message)
+			// Prepare message preserving original formatting
+			msg := tracedErr.Message
+			// For non-zero levels (inner errors), add "Caused by:" prefix
+			if i > 0 {
+				log.WithFields(fields).Debug(fmt.Sprintf("Caused by: %s", msg))
 			} else {
-				log.WithFields(fields).Debug(fmt.Sprintf("Caused by: %s", tracedErr.Message))
+				log.WithFields(fields).Log(logLevel, msg)
 			}
 		} else {
 			// Regular error in the chain
@@ -206,4 +208,45 @@ func LogTracedErrorDefault(err error, level ...logrus.Level) {
 // level specifies the log level (defaults to ErrorLevel)
 func SimpleLogDefault(err error, level ...logrus.Level) {
 	SimpleLog(err, getDefaultEntry(), level...)
+}
+
+// LogError automatically decides between LogTracedError and SimpleLog based on log level
+// DEBUG and TRACE levels use LogTracedError (detailed output)
+// INFO, WARN, ERROR levels use SimpleLog (concise output)
+//
+// Environment variable LOG_ERROR_VERBOSE can override this behavior:
+//   LOG_ERROR_VERBOSE=true   - forces detailed logging for all levels
+//   LOG_ERROR_VERBOSE=false  - forces simple logging for all levels
+//   LOG_ERROR_VERBOSE not set - auto mode (default)
+func LogError(err error, log *logrus.Entry, level ...logrus.Level) {
+	if err == nil {
+		return
+	}
+
+	logLevel := logrus.ErrorLevel
+	if len(level) > 0 {
+		logLevel = level[0]
+	}
+
+	// Default behavior: detailed for DEBUG/TRACE, simple for INFO/WARN/ERROR
+	useDetailed := logLevel <= logrus.DebugLevel
+
+	// Check environment variable override
+	envValue := os.Getenv("LOG_ERROR_VERBOSE")
+	if envValue != "" {
+		// Only override if explicitly set
+		if envValue == "true" {
+			useDetailed = true
+		} else if envValue == "false" {
+			useDetailed = false
+		}
+		// Other values are ignored, keeping auto behavior
+	}
+
+	// Execute logging based on decision
+	if useDetailed {
+		LogTracedError(err, log, logLevel)
+	} else {
+		SimpleLog(err, log, logLevel)
+	}
 }
