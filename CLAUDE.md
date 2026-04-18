@@ -32,9 +32,55 @@ Key files:
 - `simple_api.go` - Convenience functions (E, WrapE, Must, etc.)
 
 ### logger Package
-The `logger` package provides structured logging specifically designed for `TracedError`:
+The `logger` package provides a comprehensive logging solution with structured error logging, async output, log rotation, and sensitive data filtering.
 
-#### **Recommended: LogError()** ⭐
+#### **Logger Struct (Recommended for New Code)**
+The primary interface is the `Logger` struct which provides a complete logging solution:
+
+```go
+cfg := &logger.Config{
+    Level:        "info",              // Log level
+    Format:       "json",              // Output format (text, json)
+    Output:       "stdout",            // Output target (stdout, stderr, file)
+    FilePath:     "app.log",           // Log file path
+    MaxSize:      100,                 // Max file size in MB
+    MaxAge:       7,                   // Max days to keep old logs
+    MaxBackups:   5,                   // Max backup files
+    AsyncEnabled: false,               // Enable async logging
+    BufferSize:   1000,                // Async buffer size
+}
+log, err := logger.NewLogger(cfg)
+```
+
+**Key Features:**
+- **Async Logging**: Non-blocking log writes with configurable buffer
+- **Log Rotation**: Automatic rotation based on size and time
+- **Environment Configuration**: Easy setup via environment variables
+- **Multiple Output Formats**: Text and JSON support
+- **Thread Safety**: Safe for concurrent use
+
+**Methods:**
+```go
+// Standard logging
+log.Trace("message")
+log.Debug("message")
+log.Info("message")
+log.Warn("message")
+log.Error("message")
+
+// Structured logging
+log.WithField("key", "value").Info("message")
+log.WithFields(logrus.Fields{...}).Info("message")
+log.WithError(err).Error("error occurred")
+
+// Dynamic configuration
+log.SetLevel("debug")
+config := log.GetConfig()
+```
+
+#### **Error Logging Functions (For TracedError Integration)**
+
+##### **LogError()** ⭐
 - **Automatic decision making** based on log level
 - DEBUG/TRACE → detailed logging (LogTracedError)
 - INFO/WARN/ERROR → simple logging (SimpleLog)
@@ -44,12 +90,86 @@ The `logger` package provides structured logging specifically designed for `Trac
   - Unset = auto mode (default)
 - **Best practice** for most use cases
 
-#### Other Functions:
-- `LogTracedError()` - Detailed error chain logging with full context
-- `SimpleLog()` - Production-safe logging with sensitive data filtering
-- `IsSensitiveKey()` - Detects sensitive field names (password, token, secret, credit, key)
-- Default logger support with `SetDefaultLogger()`
-- Test helpers: `NewTestEntry()`, `NewJSONTestEntry()`
+##### **LogTracedError()**
+- Detailed error chain logging with full context
+- Supports both TracedError and standard Go errors in chains
+- Includes location, timestamp, and error codes
+- Inner errors logged at Debug level
+- Use for development debugging
+
+##### **SimpleLog()**
+- Production-safe logging with sensitive data filtering
+- Filters passwords, tokens, API keys, and secrets
+- Suitable for production environments
+
+##### **Global Functions**
+- `InitGlobal(cfg *Config)` - Initialize global logger
+- `Global() *Logger` - Get global logger instance
+- `LogTracedErrorDefault(err error, level ...logrus.Level)` - Log using global logger
+- `SimpleLogDefault(err error, level ...logrus.Level)` - Simple log using global logger
+
+#### **Configuration**
+```go
+// Via Config struct
+cfg := &logger.Config{
+    Level:  "info",
+    Format: "json",
+    Output: "stdout",
+}
+log, _ := logger.NewLogger(cfg)
+
+// Via environment variables
+// LOG_LEVEL=debug LOG_FORMAT=json LOG_OUTPUT=file go run main.go
+cfg := logger.LoadConfig()
+log, _ := logger.NewLogger(cfg)
+
+// From JSON file
+log, _ := logger.NewLoggerFromConfigFile("config/logger.json")
+```
+
+#### **Async Logging**
+```go
+cfg := &logger.Config{
+    Level:        "info",
+    Format:       "json",
+    Output:       "stdout",
+    AsyncEnabled: true,
+    BufferSize:   2000,
+}
+log, _ := logger.NewLogger(cfg)
+defer log.Close() // Ensure all logs are flushed
+
+log.Info("This is logged asynchronously")
+```
+
+#### **Log Rotation**
+```go
+cfg := &logger.Config{
+    Level:      "info",
+    Format:     "json",
+    Output:     "file",
+    FilePath:   "/var/log/myapp/app.log",
+    MaxSize:    100,  // 100MB
+    MaxAge:     30,   // 30 days
+    MaxBackups: 10,   // Keep 10 backups
+}
+log, _ := logger.NewLogger(cfg)
+defer log.Close()
+```
+
+#### **Test Helpers**
+```go
+entry, buf := logger.NewTestEntry()      // Text formatter
+entry, buf := logger.NewJSONTestEntry()  // JSON formatter
+```
+
+#### **Sensitive Data Filtering**
+The `IsSensitiveKey()` function detects and filters:
+- Passwords: `password`, `user_password`, `password_hash`
+- Tokens: `token`, `api_token`, `access_token`
+- Secrets: `secret`, `secret_key`, `api_secret`
+- Credit info: `credit`, `credit_card`
+- Keys: `key`, `api_key`, `private_key` (specific patterns only)
 
 ## Development Commands
 

@@ -1,15 +1,45 @@
 # Logger Package
 
-Structured logging for traced errors with sensitive data filtering.
+A comprehensive logging library for Go with structured error logging, async output, log rotation, and sensitive data filtering.
 
 ## Overview
 
-The `logger` package provides specialized logging functions for working with `TracedError` objects from the `errors` package. It offers:
+The `logger` package provides a complete logging solution with:
 
-- Detailed error chain logging
-- Automatic sensitive data filtering
-- Production-safe logging
-- Test helper functions
+- **Structured Error Logging**: Specialized functions for `TracedError` with full error chain support
+- **Sensitive Data Filtering**: Automatic filtering of passwords, tokens, keys, and secrets
+- **Async Logging**: Non-blocking log output for high-performance applications
+- **Log Rotation**: Automatic file rotation based on size and time
+- **Multiple Output Formats**: Text and JSON formats
+- **Environment Configuration**: Easy configuration via environment variables
+- **Test Helpers**: Built-in utilities for testing log output
+
+## Quick Start
+
+```go
+import (
+    "github.com/kaichao/gopkg/logger"
+    "github.com/sirupsen/logrus"
+)
+
+// Create a logger
+cfg := &logger.Config{
+    Level:  "info",
+    Format: "json",
+    Output: "stdout",
+}
+log, _ := logger.NewLogger(cfg)
+
+// Log a message
+log.Info("Application started")
+
+// Log with fields
+log.WithField("user_id", 123).Info("User logged in")
+
+// Log an error
+err := errors.New("database connection failed")
+log.WithError(err).Error("Database error")
+```
 
 ## Core Functions
 
@@ -77,6 +107,112 @@ mixedWrapped := errors.Wrap(stdErr, "operation failed").WithContext("filename", 
 logger.LogTracedError(mixedWrapped, entry)
 ```
 
+## Logger Struct
+
+The `Logger` struct provides a complete logging interface with support for structured logging, async output, and log rotation.
+
+### Creating a Logger
+
+```go
+cfg := &logger.Config{
+    Level:  "info",
+    Format: "json",
+    Output: "stdout",
+}
+
+// Create logger
+log, err := logger.NewLogger(cfg)
+if err != nil {
+    panic("failed to create logger: " + err.Error())
+}
+
+// Or create with panic on error
+log := logger.NewOrMust(cfg)
+```
+
+### From Configuration File
+
+```go
+// Load from JSON config file
+log, err := logger.NewLoggerFromConfigFile("config/logger.json")
+```
+
+### Configuration Options
+
+| Option | Description | Default | Environment Variable |
+|--------|-------------|---------|---------------------|
+| `Level` | Log level (trace, debug, info, warn, error, fatal) | info | `LOG_LEVEL` |
+| `Format` | Output format (text, json) | json | `LOG_FORMAT` |
+| `Output` | Output target (stdout, stderr, file) | stdout | `LOG_OUTPUT` |
+| `FilePath` | Log file path (when Output=file) | app.log | `LOG_FILE_PATH` |
+| `MaxSize` | Max file size in MB before rotation | 100 | `LOG_MAX_SIZE` |
+| `MaxAge` | Max days to keep old log files | 7 | `LOG_MAX_AGE` |
+| `MaxBackups` | Max number of old log files to keep | 5 | `LOG_MAX_BACKUPS` |
+| `AsyncEnabled` | Enable asynchronous logging | false | `LOG_ASYNC_ENABLED` |
+| `BufferSize` | Async buffer size | 1000 | `LOG_BUFFER_SIZE` |
+| `DisableCaller` | Disable caller reporting | false | `LOG_DISABLE_CALLER` |
+
+### Logger Methods
+
+The `Logger` struct provides comprehensive logging methods:
+
+#### Basic Logging
+```go
+// Standard log levels
+log.Trace("Trace message")
+log.Debug("Debug message")
+log.Info("Info message")
+log.Warn("Warning message")
+log.Error("Error message")
+log.Fatal("Fatal message")
+
+// Formatted logging
+log.Tracef("User %d logged in", userID)
+log.Debugf("Processing %s", filename)
+log.Infof("Request completed in %v", duration)
+log.Warnf("High memory usage: %d MB", memUsage)
+log.Errorf("Failed to connect: %v", err)
+log.Fatalf("Cannot start: %v", err)
+```
+
+#### Structured Logging
+```go
+// With single field
+log.WithField("user_id", 123).Info("User logged in")
+
+// With multiple fields
+log.WithFields(logrus.Fields{
+    "user_id": 123,
+    "action": "login",
+    "ip": "192.168.1.1",
+}).Info("User activity")
+
+// With error
+log.WithError(err).Error("Operation failed")
+
+// Chained context
+log.WithField("request_id", "abc-123").
+    WithField("user_id", 456).
+    Info("Processing request")
+```
+
+#### Dynamic Configuration
+```go
+// Change log level
+if err := log.SetLevel("debug"); err != nil {
+    log.Error("Failed to set log level")
+}
+
+// Get current configuration
+config := log.GetConfig()
+fmt.Printf("Current level: %s\n", log.GetLevel())
+
+// Check if level is enabled
+if log.IsLevelEnabled(logrus.DebugLevel) {
+    log.Debug("Debug logging is enabled")
+}
+```
+
 ### SimpleLog
 Production-safe logging with sensitive data filtering.
 
@@ -102,23 +238,25 @@ err := errors.New("auth failed").
 logger.SimpleLog(err, entry)
 ```
 
-### Default Logger Functions (Simplified API)
-For simpler usage, the package provides default logger functions that don't require passing a `logrus.Entry`.
+### Global Logger Functions
+For simpler usage, the package provides global logger functions that don't require creating a logger instance.
 
 ```go
-// Set the default logger (optional, called automatically with sensible defaults)
-func SetDefaultLogger(logger *logrus.Logger)
+// Initialize global logger (optional)
+func InitGlobal(cfg *Config) error
 
-// Log using default logger
+// Get global logger
+func Global() *Logger
+
+// Global logging functions
 func LogTracedErrorDefault(err error, level ...logrus.Level)
 func SimpleLogDefault(err error, level ...logrus.Level)
 ```
 
 **Features:**
-- No need to create or pass `logrus.Entry`
-- Uses package-level default logger
-- Same functionality as regular functions
-- Backward compatible
+- No need to manage logger instances
+- Thread-safe global logger
+- Easy to use in simple applications or libraries
 
 **Usage:**
 ```go
@@ -127,27 +265,127 @@ import (
     "github.com/kaichao/gopkg/logger"
 )
 
-// Optionally configure default logger (once at app startup)
-logger.SetDefaultLogger(myCustomLogger)
+// Initialize global logger (once at app startup)
+cfg := &logger.Config{
+    Level:  "info",
+    Format: "json",
+}
+logger.InitGlobal(cfg)
 
-// Create error
-err := errors.New("file not found").
-    WithContext("filename", "data.txt")
+// Get global logger
+log := logger.Global()
 
-// Simple logging with default logger
+// Use global logger
+log.Info("Application started")
+
+// Or use default error logging functions
+err := errors.New("file not found")
 logger.LogTracedErrorDefault(err)
-
-// Or with custom level
-logger.SimpleLogDefault(err, logrus.WarnLevel)
 ```
 
 **Default Configuration:**
-If `SetDefaultLogger` is not called, a default logger is automatically created with:
-- Output: `os.Stderr`
-- Formatter: `logrus.TextFormatter` with full timestamps
-- Level: `logrus.InfoLevel`
+If `InitGlobal` is not called, a default logger is automatically created with:
+- Level: `info`
+- Format: `json`
+- Output: `stdout`
+
+### AsyncWriter
+Asynchronous log writer for high-performance applications.
+
+```go
+type AsyncWriter struct {
+    // Async configuration
+    BufferSize int  // Channel buffer size (default: 1000)
+    BatchSize  int  // Batch write size (default: 100)
+}
+```
+
+**Features:**
+- Non-blocking log writes
+- Buffered channel with configurable size
+- Batch processing for efficiency
+- Graceful degradation when buffer is full
+- Automatic flushing on shutdown
+
+**Usage:**
+```go
+// Enable async logging in config
+cfg := &logger.Config{
+    Level:        "info",
+    Format:       "json",
+    Output:       "stdout",
+    AsyncEnabled: true,
+    BufferSize:   2000,
+}
+
+log, _ := logger.NewLogger(cfg)
+defer log.Close() // Ensure all logs are flushed
+
+log.Info("This is logged asynchronously")
+```
+
+### RotatedWriter
+Automatic log file rotation based on size and time.
+
+```go
+type RotatedWriter struct {
+    // Rotation configuration
+    MaxSize    int // Maximum file size in MB (default: 100)
+    MaxAge     int // Maximum days to keep (default: 7)
+    MaxBackups int // Maximum backup files (default: 5)
+}
+```
+
+**Features:**
+- Size-based rotation
+- Time-based rotation (daily)
+- Automatic cleanup of old files
+- Configurable retention policy
+- Thread-safe operations
+
+**Usage:**
+```go
+// Configure file output with rotation
+cfg := &logger.Config{
+    Level:      "info",
+    Format:     "json",
+    Output:     "file",
+    FilePath:   "/var/log/myapp/app.log",
+    MaxSize:    100,  // 100MB
+    MaxAge:     30,   // 30 days
+    MaxBackups: 10,   // Keep 10 backups
+}
+
+log, _ := logger.NewLogger(cfg)
+defer log.Close()
+
+log.Info("This is logged to rotating file")
+```
+
+### Logger Management
+```go
+// Create a copy of logger (for independent context)
+logCopy := log.Copy()
+
+// Add fields to copy without affecting original
+logCopy.WithField("request_id", "abc-123")
+
+// Close logger and release resources
+if err := log.Close(); err != nil {
+    log.Error("Failed to close logger")
+}
+
+// Sync pending logs (for async writers)
+if err := log.Sync(); err != nil {
+    log.Error("Failed to sync logs")
+}
+```
 
 ## Sensitive Data Filtering
+
+## Sensitive Data Filtering
+
+The logger includes built-in protection against accidentally logging sensitive information.
 
 ### IsSensitiveKey
 Checks if a key contains sensitive information.
@@ -168,6 +406,19 @@ func IsSensitiveKey(key string) bool
 - `api_key` → filtered
 - `key1` → NOT filtered
 - `customer_key` → NOT filtered
+
+**Usage:**
+```go
+// Sensitive data is automatically filtered in SimpleLog
+err := errors.New("auth failed").
+    WithContext("username", "john_doe").
+    WithContext("password", "secret123").  // This field will be filtered
+    WithContext("api_key", "sk-123456")   // This field will be filtered
+
+logger.SimpleLog(err, entry)  // Password and API key won't appear in logs
+```
+
+## Test Helper Functions
 
 ## Test Helper Functions
 
@@ -202,16 +453,19 @@ func TestLogging(t *testing.T) {
     }
 }
 ```
+```
 
-## Development vs Production
+## Advanced Features
 
-### Development Environment
+### Development vs Production
+
+#### Development Environment
 Use `LogTracedError` for detailed debugging:
 - Full error chains
 - All context information
 - Complete stack traces
 
-### Production Environment
+#### Production Environment
 Use `SimpleLog` for security and performance:
 - Sensitive data filtered
 - Concise output
@@ -227,6 +481,128 @@ func handleError(err error, log *logrus.Entry, isProduction bool) {
     }
 }
 ```
+
+## Code Analysis and Potential Issues
+
+### ✅ Well-Implemented Features
+1. **Error Chain Support**: Full support for both TracedError and standard Go errors
+2. **Sensitive Data Filtering**: Comprehensive pattern matching for sensitive keys
+3. **Async Logging**: Non-blocking with graceful degradation
+4. **Log Rotation**: Size and time-based rotation with cleanup
+5. **Environment Configuration**: Easy configuration via environment variables
+6. **Test Coverage**: Comprehensive tests for all major features
+7. **Thread Safety**: Proper use of mutexes for concurrent access
+
+### ⚠️ Potential Issues and Considerations
+
+#### 1. AsyncWriter Channel Overflow
+**Issue**: When the async buffer is full, logs are written synchronously, which could cause blocking in high-throughput scenarios.
+
+**Mitigation**: 
+- Default buffer size is reasonable (1000 entries)
+- Batch processing reduces overhead
+- Consider monitoring `Buffered()` vs `Cap()` metrics
+
+#### 2. Error Chain Memory Usage
+**Issue**: `collectErrorChain` builds a slice of all errors in the chain, which could be memory-intensive for very deep error chains.
+
+**Mitigation**: 
+- Error chains are typically shallow (2-5 errors)
+- Memory usage is temporary and freed immediately after logging
+- Consider iterative processing for extremely deep chains
+
+#### 3. File Permissions
+**Issue**: Log files are created with `0644` permissions, which might be too permissive for sensitive applications.
+
+**Recommendation**: 
+```go
+// Consider making this configurable
+cfg := &logger.Config{
+    FilePath:     "/var/log/app.log",
+    // Add FileMode option in future
+}
+```
+
+#### 4. Rotation Race Condition
+**Issue**: There's a small window between checking file size and writing where rotation might not occur immediately.
+
+**Impact**: Log files might slightly exceed the configured max size.
+
+**Mitigation**: 
+- Check includes `additionalSize` parameter
+- Daily rotation provides additional safety net
+- Acceptable for most use cases
+
+#### 5. Global Logger Initialization
+**Issue**: The `Global()` function uses `sync.Once` which means the first call determines the configuration.
+
+**Best Practice**: 
+```go
+// Call InitGlobal early in main()
+func main() {
+    cfg := &logger.Config{Level: "debug"}
+    logger.InitGlobal(cfg)
+    
+    // Now Global() will use this configuration
+    log := logger.Global()
+}
+```
+
+#### 6. Sensitive Key False Positives
+**Issue**: The `IsSensitiveKey` function might be too aggressive or not aggressive enough depending on use case.
+
+**Examples**:
+- `key_name` is NOT filtered (false negative if it contains a secret)
+- `customer_key` is NOT filtered (could be sensitive)
+- `key1` is NOT filtered (correct, not a secret key)
+
+**Recommendation**: 
+```go
+// Consider extending patterns for your use case
+func MySensitiveKey(key string) bool {
+    if logger.IsSensitiveKey(key) {
+        return true
+    }
+    // Add custom patterns
+    customPatterns := []string{"customer_key", "internal_key"}
+    for _, pattern := range customPatterns {
+        if strings.Contains(strings.ToLower(key), pattern) {
+            return true
+        }
+    }
+    return false
+}
+```
+
+#### 7. Missing Features
+1. **No log redaction for values**: Only keys are filtered, not values
+2. **No structured field filtering**: Cannot filter specific field values
+3. **No hooks/processors**: Cannot add custom processing to log entries
+4. **No sampling**: High-volume logs could overwhelm systems
+5. **No compression**: Rotated files are not compressed automatically
+
+### Recommendations
+
+#### For Production Deployments
+1. **Use async logging** for better performance
+2. **Enable file rotation** to prevent disk space issues
+3. **Monitor log file sizes** and adjust rotation settings
+4. **Review sensitive key patterns** for your specific use case
+5. **Consider log sampling** for high-volume applications
+
+#### For Development
+1. **Use detailed logging** (`LogTracedError`) for better debugging
+2. **Enable debug level** to see full error chains
+3. **Use structured fields** for better log analysis
+4. **Test log output** using the test helpers
+
+#### Future Enhancements
+1. Add support for custom sensitive key patterns
+2. Implement log entry processors/hooks
+3. Add log sampling support
+4. Add automatic compression for rotated files
+5. Add support for remote log destinations
+6. Implement log filtering rules
 
 ## Integration with Errors Package
 

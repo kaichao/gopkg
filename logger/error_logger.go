@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 
 	"github.com/kaichao/gopkg/errors"
 
@@ -167,44 +166,54 @@ func NewJSONTestEntry() (*logrus.Entry, *bytes.Buffer) {
 	return logrus.NewEntry(log), &buf
 }
 
-// defaultLogger is the package-level default logger
-var (
-	defaultLogger     *logrus.Logger
-	defaultLoggerOnce sync.Once
-)
-
-// init initializes the default logger
-func init() {
-	defaultLoggerOnce.Do(func() {
-		defaultLogger = logrus.New()
-		defaultLogger.SetOutput(os.Stderr)
-		defaultLogger.SetFormatter(&logrus.TextFormatter{
-			FullTimestamp: true,
-		})
-	})
-}
-
 // SetDefaultLogger sets the package-level default logger
 // This should be called early in the application initialization
-func SetDefaultLogger(logger *logrus.Logger) {
-	if logger == nil {
+// DEPRECATED: Use logger.InitGlobal() instead
+func SetDefaultLogger(logrusLogger *logrus.Logger) {
+	if logrusLogger == nil {
 		return
 	}
-	defaultLogger = logger
+
+	// Create a new Logger that wraps the provided logrus.Logger
+	wrappedLogger := &Logger{
+		Logger: logrusLogger,
+		config: &Config{
+			Level:  logrusLogger.GetLevel().String(),
+			Format: "text", // Assume text for backward compatibility
+			Output: "stdout",
+		},
+		entry:  logrus.NewEntry(logrusLogger),
+		fields: make(logrus.Fields),
+	}
+
+	// Set as global logger
+	defaultLogger = wrappedLogger
 }
 
-// getDefaultEntry returns a logrus.Entry using the default logger
+// getDefaultEntry returns a logrus.Entry using the global logger
 func getDefaultEntry() *logrus.Entry {
-	return logrus.NewEntry(defaultLogger)
+	// Use the global logger from logger package
+	logger := Global()
+	if logger != nil {
+		return logger.NewEntry()
+	}
+
+	// Fallback to a basic logger if global logger is not available
+	fallbackLogger := logrus.New()
+	fallbackLogger.SetOutput(os.Stderr)
+	fallbackLogger.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp: true,
+	})
+	return logrus.NewEntry(fallbackLogger)
 }
 
-// LogTracedErrorDefault logs traced errors using the default logger
+// LogTracedErrorDefault logs traced errors using the global logger
 // level specifies the log level for the outermost error (inner errors are logged as Debug)
 func LogTracedErrorDefault(err error, level ...logrus.Level) {
 	LogTracedError(err, getDefaultEntry(), level...)
 }
 
-// SimpleLogDefault logs errors using the default logger with sensitive data filtering
+// SimpleLogDefault logs errors using the global logger with sensitive data filtering
 // level specifies the log level (defaults to ErrorLevel)
 func SimpleLogDefault(err error, level ...logrus.Level) {
 	SimpleLog(err, getDefaultEntry(), level...)
@@ -215,9 +224,10 @@ func SimpleLogDefault(err error, level ...logrus.Level) {
 // INFO, WARN, ERROR levels use SimpleLog (concise output)
 //
 // Environment variable LOG_ERROR_VERBOSE can override this behavior:
-//   LOG_ERROR_VERBOSE=true   - forces detailed logging for all levels
-//   LOG_ERROR_VERBOSE=false  - forces simple logging for all levels
-//   LOG_ERROR_VERBOSE not set - auto mode (default)
+//
+//	LOG_ERROR_VERBOSE=true   - forces detailed logging for all levels
+//	LOG_ERROR_VERBOSE=false  - forces simple logging for all levels
+//	LOG_ERROR_VERBOSE not set - auto mode (default)
 func LogError(err error, log *logrus.Entry, level ...logrus.Level) {
 	if err == nil {
 		return
