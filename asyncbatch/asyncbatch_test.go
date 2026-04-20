@@ -77,14 +77,14 @@ func TestBatchProcessor(t *testing.T) {
 		var batches [][]string
 		var wg sync.WaitGroup
 
-		// 创建 BatchProcessor，设置最大批次大小为 10
+		// Create BatchProcessor with max batch size 10
 		bp, err := asyncbatch.NewBatchProcessor[string](
 			func(batch []string) {
 				t.Logf("Processing batch of size %d: %v", len(batch), batch)
 				mu.Lock()
 				batches = append(batches, batch)
 				mu.Unlock()
-				wg.Done() // 每个批次处理后调用 Done
+				wg.Done() // Call Done after each batch is processed
 			},
 			asyncbatch.WithMaxSize(10),
 			asyncbatch.WithUpperRatio(0.5),

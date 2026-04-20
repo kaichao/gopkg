@@ -7,7 +7,7 @@
 ## Modules
 
 ### 1. `asyncbatch`
-Asynchronous batch processor triggered by size threshold or timeout.
+Generic batch processor for asynchronous task processing with dynamic flow control, type safety, and parallel processing.
 
 ### 2. `pgbulk`
 Lightweight PostgreSQL bulk operations (COPY, INSERT, UPDATE) with batch processing, SQL templates, and enhanced error handling.

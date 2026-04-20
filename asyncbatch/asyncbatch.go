@@ -1,11 +1,12 @@
 package asyncbatch
 
 import (
-	"errors"
 	"math"
 	"sync"
 	"time"
 	"unsafe"
+
+	"github.com/kaichao/gopkg/errors"
 )
 
 // BatchProcessor is a generic batch processor for asynchronous task processing.
@@ -76,7 +77,7 @@ func WithUnderfilledWait(duration time.Duration) Option {
 func WithNumWorkers(n int) Option {
 	return func(bp *BatchProcessor[any]) {
 		if n > 0 {
-			// 保证赋值操作作用于正确字段
+			// Ensure assignment to correct field
 			bp.numWorkers = n
 		}
 	}
@@ -98,30 +99,30 @@ func NewBatchProcessor[T any](
 		stop:            make(chan struct{}),
 	}
 
-	// 类型转换适配Option
+	// Type conversion to adapt Option
 	anyBP := (*BatchProcessor[any])(unsafe.Pointer(bp))
 	for _, opt := range opts {
 		opt(anyBP)
 	}
 
-	// 保持原始验证逻辑
+	// Keep original validation logic
 	if bp.worker == nil {
-		return nil, errors.New("worker function is required")
+		return nil, errors.E("worker function is required")
 	}
 	if bp.numWorkers < 1 || bp.numWorkers > 8 {
-		return nil, errors.New("numWorkers must be between 1 and 8")
+		return nil, errors.E("numWorkers must be between 1 and 8")
 	}
 	if bp.upperRatio <= 0 || bp.upperRatio > 1 {
-		return nil, errors.New("upperRatio must be between 0 and 1")
+		return nil, errors.E("upperRatio must be between 0 and 1")
 	}
 	if bp.lowerRatio <= 0 || bp.lowerRatio > 1 {
-		return nil, errors.New("lowerRatio must be between 0 and 1")
+		return nil, errors.E("lowerRatio must be between 0 and 1")
 	}
 	if bp.upperRatio < bp.lowerRatio {
-		return nil, errors.New("upperRatio must be greater than or equal to lowerRatio")
+		return nil, errors.E("upperRatio must be greater than or equal to lowerRatio")
 	}
 	if bp.fixedWait >= bp.underfilledWait {
-		return nil, errors.New("fixedWait must be less than underfilledWait")
+		return nil, errors.E("fixedWait must be less than underfilledWait")
 	}
 
 	bufferSize := bp.maxSize * bp.numWorkers * 2
@@ -144,13 +145,13 @@ func NewBatchProcessor[T any](
 // Add adds a task to the processor.
 func (bp *BatchProcessor[T]) Add(task T) error {
 	if bp.closed {
-		return errors.New("batch processor is closed")
+		return errors.E("batch processor is closed")
 	}
 	select {
 	case bp.tasks <- task:
 		return nil
 	default:
-		return errors.New("task channel is full")
+		return errors.E("task channel is full")
 	}
 }
 
@@ -159,9 +160,9 @@ func (bp *BatchProcessor[T]) Shutdown() {
 	bp.closeOnce.Do(func() {
 		bp.closed = true
 		close(bp.stop)
-		bp.wg.Wait() // 等待所有 worker 停止
+		bp.wg.Wait() // Wait for all workers to stop
 
-		// 单独处理剩余任务，不涉及 WaitGroup
+		// Process remaining tasks separately, not involving WaitGroup
 		close(bp.tasks)
 		remaining := make([]T, 0, len(bp.tasks))
 		for task := range bp.tasks {
@@ -190,7 +191,7 @@ func (bp *BatchProcessor[T]) run() {
 	}()
 
 	for {
-		// 优先检查停止信号
+		// First check for stop signal
 		select {
 		case <-bp.stop:
 			bp.flushBatch(batch)
@@ -198,14 +199,14 @@ func (bp *BatchProcessor[T]) run() {
 		default:
 		}
 
-		// 阈值检查前置
+		// Check thresholds first
 		if shouldFlush := len(batch) >= bp.maxSize || len(batch) >= int(float64(bp.maxSize)*bp.upperRatio); shouldFlush {
 			bp.flushBatch(batch)
 			batch, timer = bp.resetBatchAndTimer(batch, timer)
 			continue
 		}
 
-		// 初始化定时器
+		// Initialize timer
 		timer = bp.initTimer(timer)
 
 		select {
@@ -222,14 +223,14 @@ func (bp *BatchProcessor[T]) run() {
 	}
 }
 
-// 辅助函数 1：处理批次提交
+// Helper function 1: Process batch submission
 func (bp *BatchProcessor[T]) flushBatch(batch []T) {
 	if len(batch) > 0 {
 		bp.worker(batch)
 	}
 }
 
-// 辅助函数 2：重置批次和定时器
+// Helper function 2: Reset batch and timer
 func (bp *BatchProcessor[T]) resetBatchAndTimer(batch []T, timer *time.Timer) ([]T, *time.Timer) {
 	if timer != nil {
 		timer.Stop()
@@ -237,7 +238,7 @@ func (bp *BatchProcessor[T]) resetBatchAndTimer(batch []T, timer *time.Timer) ([
 	return make([]T, 0, bp.maxSize), nil
 }
 
-// 辅助函数 3：初始化定时器
+// Helper function 3: Initialize timer
 func (bp *BatchProcessor[T]) initTimer(timer *time.Timer) *time.Timer {
 	if timer == nil {
 		return time.NewTimer(bp.fixedWait)
@@ -246,14 +247,14 @@ func (bp *BatchProcessor[T]) initTimer(timer *time.Timer) *time.Timer {
 	return timer
 }
 
-// 辅助函数 4：处理定时器到期
+// Helper function 4: Handle timer expiration
 func (bp *BatchProcessor[T]) handleTimerExpired(batch []T, timer *time.Timer, lowerThreshold int) ([]T, *time.Timer) {
 	if len(batch) >= lowerThreshold {
 		bp.flushBatch(batch)
 		return bp.resetBatchAndTimer(batch, timer)
 	}
 
-	// 启动二次等待
+	// Start secondary waiting
 	timer.Reset(bp.underfilledWait)
 	select {
 	case task, ok := <-bp.tasks:
