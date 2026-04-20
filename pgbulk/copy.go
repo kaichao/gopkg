@@ -2,7 +2,6 @@ package pgbulk
 
 import (
 	"context"
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -20,7 +19,7 @@ func Copy(conn *pgx.Conn, sqlTemplate string, data [][]interface{}) (int, error)
 	re := regexp.MustCompile(`INSERT\s+INTO\s+(\w+)\s*\(([^)]*)\)`)
 	matches := re.FindStringSubmatch(sqlTemplate)
 	if len(matches) != 3 {
-		return 0, fmt.Errorf("invalid sqlTemplate format")
+		return 0, errors.E("invalid sqlTemplate format")
 	}
 	tableName := matches[1]
 	columns := strings.Split(matches[2], ",")

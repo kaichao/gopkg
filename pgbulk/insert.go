@@ -9,19 +9,19 @@ import (
 	"github.com/kaichao/gopkg/errors"
 )
 
-// Insert 使用提供的 SQL 模板和数据将数据插入数据库
-// 参数说明：
-//   - onConflict: 可变长参数
-//   - 如果提供0个参数：不使用ON CONFLICT子句
-//   - 如果提供1个参数：第一个参数为ON CONFLICT子句
+// Insert inserts data into database using provided SQL template and data
+// Parameters:
+//   - onConflict: variadic parameter
+//   - If 0 parameters provided: no ON CONFLICT clause used
+//   - If 1 parameter provided: first parameter is ON CONFLICT clause
 func Insert(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, onConflict ...string) error {
-	// 检查是否有ON CONFLICT子句
+	// Check for ON CONFLICT clause
 	conflictClause := ""
 	if len(onConflict) > 0 {
 		conflictClause = onConflict[0]
 	}
 
-	// 构建 VALUES 部分
+	// Build VALUES part
 	var valuePlaceholders []string
 	for i := range data {
 		var placeholders []string
@@ -32,7 +32,7 @@ func Insert(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, onConflict
 	}
 	valuesClause := strings.Join(valuePlaceholders, ",")
 
-	// 构建完整的 SQL 语句
+	// Build complete SQL statement
 	var fullSQL string
 	if conflictClause != "" {
 		fullSQL = fmt.Sprintf("%s VALUES %s %s", sqlTemplate, valuesClause, conflictClause)
@@ -40,13 +40,13 @@ func Insert(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, onConflict
 		fullSQL = fmt.Sprintf("%s VALUES %s", sqlTemplate, valuesClause)
 	}
 
-	// 准备参数
+	// Prepare parameters
 	var args []interface{}
 	for _, row := range data {
 		args = append(args, row...)
 	}
 
-	// 执行 SQL 语句
+	// Execute SQL statement
 	_, err := conn.Exec(context.Background(), fullSQL, args...)
 	return errors.WrapE(err, "pgx insert", "sql-template", sqlTemplate)
 }

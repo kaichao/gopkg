@@ -1,15 +1,14 @@
 # pgbulk
 
-[中文](README.zh.md) | English
-
 Lightweight Go package for high-performance PostgreSQL bulk operations.
 
 ## Features
 
 - **Batch Processing**: Automatically chunks large datasets into optimal batches
-- **SQL Templates**: Reusable templates with dynamic placeholders
+- **SQL Templates**: Reusable templates with dynamic placeholders  
 - **Full CRUD Support**: `INSERT`, `UPDATE`, and `INSERT...RETURNING` operations
 - **PG-Compatible**: Respects PostgreSQL's parameter limits
+- **Error Handling**: Enhanced error tracing with `github.com/kaichao/gopkg/errors`
 
 ## Use Cases
 
@@ -17,7 +16,6 @@ Lightweight Go package for high-performance PostgreSQL bulk operations.
 - High-frequency metrics/logging data storage
 - ETL pipelines requiring `INSERT RETURNING id`
 - Batch updates for inventory/order systems
-
 
 ## Installation
 
@@ -30,169 +28,72 @@ go get github.com/jackc/pgx/v5
 
 ## Quick Start
 
-Below are examples demonstrating the main functions of the `pgbulk` package.
+For comprehensive examples, see the [examples directory](examples/).
 
-### Copy
-
-The `Copy` function uses PostgreSQL's `COPY` command to perform bulk data insertion. The SQL template should be provided as `"INSERT INTO table_name (col1, col2)"`, and it will be internally processed into an actual `COPY` command.
+Basic usage:
 
 ```go
-package main
-
 import (
-	"context"
-	"fmt"
-	"github.com/kaichao/gopkg/pgbulk"
-	"github.com/jackc/pgx/v5"
+    "context"
+    "fmt"
+    "github.com/jackc/pgx/v5"
+    "github.com/kaichao/gopkg/pgbulk"
 )
 
 func main() {
-	conn, err := pgx.Connect(context.Background(), "postgres://user:password@localhost/dbname")
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close(context.Background())
+    conn, err := pgx.Connect(context.Background(), "postgres://user:password@localhost/dbname")
+    if err != nil {
+        panic(err)
+    }
+    defer conn.Close(context.Background())
 
-	sqlTemplate := "INSERT INTO table_name (col1, col2)"
-	data := [][]interface{}{
-		{"value1", "value2"},
-		{"value3", "value4"},
-	}
-	affected, err := pgbulk.Copy(conn, sqlTemplate, data)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("Affected rows:", affected)
+    // Bulk insert using COPY
+    affected, err := pgbulk.Copy(conn, "INSERT INTO users (name, email)", [][]interface{}{
+        {"Alice", "alice@example.com"},
+        {"Bob", "bob@example.com"},
+    })
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println("Affected rows:", affected)
 }
 ```
 
-### Insert
+## Package Overview
 
-The `Insert` function is used to insert single or multiple rows of data. The SQL template should be provided as `"INSERT INTO table_name (col1, col2)"`, and it will be internally processed into a complete insert statement.
+### Functions
 
-```go
-sqlTemplate := "INSERT INTO table_name (col1, col2)"
-data := [][]interface{}{
-	{"value1", "value2"},
-	{"value3", "value4"},
-}
-affected, err := pgbulk.Insert(conn, sqlTemplate, data)
-if err != nil {
-	panic(err)
-}
-fmt.Println("Affected rows:", affected)
-```
+- **Copy**: Perform bulk insert using PostgreSQL's COPY command
+- **Insert**: Insert data with optional ON CONFLICT clause  
+- **InsertReturningID**: Insert data and return IDs of inserted rows
+- **Update**: Perform bulk update with error tracking
 
-### InsertReturningID
+For complete API documentation and examples, see:
+- [package documentation](doc.go) - Detailed API reference
+- [examples/basic](examples/basic/) - Basic usage examples  
+- [examples/advanced](examples/advanced/) - Advanced scenarios
 
-The `InsertReturningID` function inserts data and returns the IDs of the newly inserted records. The SQL template should be provided as `"INSERT INTO table_name (col1, col2)"`, and it will be internally processed into an insert statement with a `RETURNING` clause.
+## Dependencies
 
-```go
-sqlTemplate := "INSERT INTO table_name (col1, col2)"
-data := [][]interface{}{
-	{"value1", "value2"},
-	{"value3", "value4"},
-}
-ids, err := pgbulk.InsertReturningID(conn, sqlTemplate, data, "id")
-if err != nil {
-	panic(err)
-}
-fmt.Println("Inserted IDs:", ids)
-```
+- [github.com/jackc/pgx/v5](https://github.com/jackc/pgx) - PostgreSQL driver
+- [github.com/kaichao/gopkg/errors](https://github.com/kaichao/gopkg/errors) - Error handling
+- [github.com/sirupsen/logrus](https://github.com/sirupsen/logrus) - Trace logging (optional)
 
-### Update
+## Error Handling
 
-The `Update` function is used to update data. The SQL template must be a complete update statement, such as `"UPDATE t_task SET f1=$1, f2=$2, f3=$3, f4=$4, f5=$5 WHERE id=$6"`.
+All functions use `github.com/kaichao/gopkg/errors` for enhanced error tracing with context. Errors include stack traces and structured context information for easier debugging.
 
-```go
-sqlTemplate := "UPDATE t_task SET f1=$1, f2=$2, f3=$3, f4=$4, f5=$5 WHERE id=$6"
-data := [][]interface{}{
-	{"newf1", "newf2", "newf3", "newf4", "newf5"},
-	{"newf6", "newf7", "newf8", "newf9", "newf10"},
-}
-ids := [][]interface{}{
-	{1},
-	{2},
-}
-failedIDs, err := pgbulk.Update(conn, sqlTemplate, data, ids)
-if err != nil {
-	panic(err)
-}
-fmt.Println("Failed update IDs:", failedIDs)
-```
+## Performance Notes
 
-## API Documentation
+- **COPY**: Most efficient for large bulk inserts (thousands to millions of rows)
+- **Insert/InsertReturningID**: Better for smaller batches with complex SQL
+- **Update**: Uses pgx batching for efficient bulk updates
+- All operations respect PostgreSQL's parameter limits (65,535 parameters per statement)
 
-### Copy
+## License
 
-```go
-func Copy(conn *pgx.Conn, sqlTemplate string, data [][]interface{}) (int64, error)
-```
+MIT License
 
-- **Parameters**:
-  - `conn *pgx.Conn`: PostgreSQL connection
-  - `sqlTemplate string`: SQL template, e.g., `"INSERT INTO table_name (col1, col2)"`, internally processed into a `COPY` command
-  - `data [][]interface{}`: Data to be inserted, a 2D array where each row corresponds to a record
+## See Also
 
-- **Returns**:
-  - `int64`: Number of successfully inserted records
-  - `error`: Error information
-
-- **Description**:
-  Uses PostgreSQL's `COPY` command to perform bulk data insertion, efficiently handling large datasets. The SQL template `"INSERT INTO table_name (col1, col2)"` is internally processed into `COPY table_name (col1, col2) FROM STDIN`.
-
-### Insert
-
-```go
-func Insert(conn *pgx.Conn, sqlTemplate string, data [][]interface{}) (int64, error)
-```
-
-- **Parameters**:
-  - `conn *pgx.Conn`: PostgreSQL connection
-  - `sqlTemplate string`: SQL template, e.g., `"INSERT INTO table_name (col1, col2)"`, internally processed into an insert statement
-  - `data [][]interface{}`: Data to be inserted, a 2D array where each row corresponds to a record
-
-- **Returns**:
-  - `int64`: Number of successfully inserted records
-  - `error`: Error information
-
-- **Description**:
-  Inserts single or multiple rows of data. The SQL template `"INSERT INTO table_name (col1, col2)"` is internally processed into `INSERT INTO table_name (col1, col2) VALUES ($1, $2)`.
-
-### InsertReturningID
-
-```go
-func InsertReturningID(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, returningColumn ...string) ([]int64, error)
-```
-
-- **Parameters**:
-  - `conn *pgx.Conn`: PostgreSQL connection
-  - `sqlTemplate string`: SQL template, e.g., `"INSERT INTO table_name (col1, col2)"`, internally processed into an insert statement with a `RETURNING` clause
-  - `data [][]interface{}`: Data to be inserted, a 2D array where each row corresponds to a record
-  - `returningColumn ...string`: Name of the column to return, e.g., `"id"`
-
-- **Returns**:
-  - `[]int64`: Array of IDs for the newly inserted records
-  - `error`: Error information
-
-- **Description**:
-  Inserts data and returns the IDs of the newly inserted records. The SQL template `"INSERT INTO table_name (col1, col2)"` is internally processed into `INSERT INTO table_name (col1, col2) VALUES ($1, $2) RETURNING id`.
-
-### Update
-
-```go
-func Update(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, ids [][]interface{}) ([][]interface{}, error)
-```
-
-- **Parameters**:
-  - `conn *pgx.Conn`: PostgreSQL connection
-  - `sqlTemplate string`: SQL template, e.g., `"UPDATE t_task SET f1=$1, f2=$2, f3=$3, f4=$4, f5=$5 WHERE id=$6"`
-  - `data [][]interface{}`: Data to be updated, a 2D array where each row corresponds to the values for the SET clause
-  - `ids [][]interface{}`: Values for the WHERE clause, a 2D array where each row corresponds to the values for the WHERE clause
-
-- **Returns**:
-  - `[][]interface{}`: Array of WHERE clause values for records that failed to update (i.e., records where the WHERE condition did not match)
-  - `error`: Error information
-
-- **Description**:
-  Updates data and returns the WHERE clause values for records that failed to update.
+- [gopkg](https://github.com/kaichao/gopkg) - Parent repository containing other utility packages

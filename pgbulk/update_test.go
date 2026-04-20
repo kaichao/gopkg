@@ -9,7 +9,7 @@ import (
 	"github.com/kaichao/gopkg/pgbulk"
 )
 
-// setupConn 创建新的数据库连接
+// setupConn creates new database connection
 func setupConn(ctx context.Context, t *testing.T) *pgx.Conn {
 	conn, err := pgx.Connect(ctx, "postgres://postgres:secret@localhost:5432/postgres?sslmode=disable")
 	if err != nil {
@@ -18,7 +18,7 @@ func setupConn(ctx context.Context, t *testing.T) *pgx.Conn {
 	return conn
 }
 
-// setupTable 创建测试表并插入初始数据
+// setupTable creates test table and inserts initial data
 func setupTable(ctx context.Context, t *testing.T, conn *pgx.Conn) {
 	_, err := conn.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS test_table (
@@ -43,7 +43,7 @@ func setupTable(ctx context.Context, t *testing.T, conn *pgx.Conn) {
 	}
 }
 
-// setupTableWithConstraint 创建带有唯一约束的测试表
+// setupTableWithConstraint creates test table with unique constraint
 func setupTableWithConstraint(ctx context.Context, t *testing.T, conn *pgx.Conn) {
 	_, err := conn.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS test_table (
@@ -68,7 +68,7 @@ func setupTableWithConstraint(ctx context.Context, t *testing.T, conn *pgx.Conn)
 	}
 }
 
-// cleanupTable 删除测试表
+// cleanupTable drops test table
 func cleanupTable(ctx context.Context, t *testing.T, conn *pgx.Conn) {
 	if conn.IsClosed() {
 		t.Log("Connection already closed, skipping table cleanup")
@@ -80,7 +80,7 @@ func cleanupTable(ctx context.Context, t *testing.T, conn *pgx.Conn) {
 	}
 }
 
-// verifyData 验证数据库中的数据
+// verifyData verifies data in database
 func verifyData(ctx context.Context, t *testing.T, conn *pgx.Conn, expected []struct {
 	id   int
 	name string
@@ -332,8 +332,8 @@ func TestUpdate(t *testing.T) {
 
 		sqlTemplate := "UPDATE test_table SET name = $1, age = $2 WHERE id = $3 AND dept = $4"
 		data := [][]interface{}{
-			{"Bob", 26},         // 将失败（name 冲突）
-			{"Bob Updated", 31}, // 未执行（事务回滚）
+			{"Bob", 26},         // will fail (name conflict)
+			{"Bob Updated", 31}, // not executed (transaction rollback)
 		}
 		ids := [][]interface{}{
 			{1, "HR"},
@@ -344,13 +344,13 @@ func TestUpdate(t *testing.T) {
 		if err == nil {
 			t.Error("Expected error due to unique constraint violation, got nil")
 		}
-		// 修改：放宽 failedIds 检查，允许空切片
+		// Note: relax failedIds check, allow empty slice
 		expectedFailedIds := [][]interface{}{{1, "HR"}}
 		if !reflect.DeepEqual(failedIds, expectedFailedIds) {
 			t.Logf("Expected failed ids %v, got %v (may be empty due to pgx error handling)", expectedFailedIds, failedIds)
 		}
 
-		// 修改：跳过 verifyData 如果连接关闭
+		// Note: skip verifyData if connection closed
 		if !conn.IsClosed() {
 			expected := []struct {
 				id   int

@@ -10,7 +10,7 @@
 Asynchronous batch processor triggered by size threshold or timeout.
 
 ### 2. `pgbulk`
-PostgreSQL bulk operations (insert/update with ID returning) with performance optimizations.
+Lightweight PostgreSQL bulk operations (COPY, INSERT, UPDATE) with batch processing, SQL templates, and enhanced error handling.
 
 ### 3. `dbcache`
 Database caching layer via [go-cache](https://github.com/patrickmn/go-cache), supporting SQL template-based loading.

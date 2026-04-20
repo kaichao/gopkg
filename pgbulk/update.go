@@ -9,7 +9,7 @@ import (
 )
 
 // Update performs a bulk update using the provided SQL template, data, and ids.
-// 返回值：(error, [][]interface{})，第二个参数为失败记录的 ids
+// Returns: (error, [][]interface{}), where second parameter is failed record ids
 func Update(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, ids [][]interface{}) ([][]interface{}, error) {
 	if len(data) != len(ids) {
 		return nil, errors.E("data and ids must have the same number of rows")
@@ -19,11 +19,11 @@ func Update(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, ids [][]in
 		return nil, nil
 	}
 
-	// 修改：使用带超时的上下文，限制事务时间
+	// Modification: use timeout context to limit transaction time
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// 开始事务
+	// Start transaction
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return nil, errors.WrapE(err, "start transaction")
@@ -36,29 +36,29 @@ func Update(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, ids [][]in
 		batch.Queue(sqlTemplate, params...)
 	}
 
-	// 通过事务发送批量操作
+	// Send batch operations through transaction
 	br := tx.SendBatch(ctx, batch)
 
 	failedIds := [][]interface{}{}
 
-	// 修改：检查每个结果，确保捕获唯一约束错误
+	// Modification: check each result to ensure capturing unique constraint errors
 	for i := 0; i < batch.Len(); i++ {
 		_, err := br.Exec()
 		if err != nil {
 			failedIds = append(failedIds, ids[i])
-			// 立即关闭批量操作，确保资源释放
+			// Immediately close batch operation to ensure resource release
 			br.Close()
 			return failedIds, errors.WrapE(err, "batch execution", "record-num", i)
 		}
 	}
 
-	// 关闭批量操作
+	// Close batch operation
 	if err := br.Close(); err != nil {
 		return failedIds, errors.WrapE(err, "close batch")
 
 	}
 
-	// 提交事务
+	// Commit transaction
 	if err := tx.Commit(ctx); err != nil {
 		return failedIds, errors.WrapE(err, "commit transaction")
 	}

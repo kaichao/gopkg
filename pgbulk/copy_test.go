@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// 用docker启动本地postgresql，docker run -e POSTGRES_PASSWORD=secret -p 5432:5432 -d postgres:17.4
+// Use docker to start local PostgreSQL: docker run -e POSTGRES_PASSWORD=secret -p 5432:5432 -d postgres:17.4
 func ExampleCopy() {
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, "postgres://postgres:secret@localhost:5432/postgres?sslmode=disable")
