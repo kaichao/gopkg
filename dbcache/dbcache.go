@@ -8,13 +8,13 @@ import (
 	"github.com/patrickmn/go-cache"
 )
 
-// DBCache ...
+// DBCache provides a generic caching layer for database queries.
 type DBCache[T any] struct {
-	db         *sql.DB
-	cache      *cache.Cache
-	sql        string
-	defaultExp time.Duration
-	loadFunc   func(...any) (T, error)
+	db         *sql.DB                 // Database connection
+	cache      *cache.Cache            // In-memory cache
+	sql        string                  // SQL template for query
+	defaultExp time.Duration           // Default cache expiration
+	loadFunc   func(...any) (T, error) // Custom loader function
 }
 
 // New ...
