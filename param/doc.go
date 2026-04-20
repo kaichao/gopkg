@@ -83,7 +83,7 @@
 // Environment Variable Name Derivation:
 //
 //	Parameter names with "-" are replaced with "_" and converted to uppercase
-//	For example: app-id → APP_ID, cluster-name → CLUSTER_NAME
+//	For example: app-id -> APP_ID, cluster-name -> CLUSTER_NAME
 //
 // Notes:
 // - If neither command line argument nor environment variable is set, the default value (static or dynamic) is used

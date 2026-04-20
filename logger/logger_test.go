@@ -161,6 +161,7 @@ func TestGlobalLogger(t *testing.T) {
 	cfg := &Config{
 		Level:  "debug",
 		Format: "json",
+		Output: "stdout",
 	}
 
 	if err := InitGlobal(cfg); err != nil {

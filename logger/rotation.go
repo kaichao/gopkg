@@ -11,7 +11,7 @@ import (
 	"github.com/kaichao/gopkg/errors"
 )
 
-// RotatedWriter 实现带轮转的日志写入器
+// RotatedWriter implements rotating log writer
 type RotatedWriter struct {
 	mu           sync.Mutex
 	file         *os.File
@@ -19,41 +19,41 @@ type RotatedWriter struct {
 	maxSize      int           // MB
 	maxAge       int           // days
 	maxBackups   int           // count
-	currentSize  int64         // 当前文件大小
-	currentName  string        // 当前文件名（带时间戳）
-	rotationTime time.Duration // 轮转间隔
-	lastRotation time.Time     // 上次轮转时间
+	currentSize  int64         // current file size
+	currentName  string        // current filename (with timestamp)
+	rotationTime time.Duration // rotation interval
+	lastRotation time.Time     // last rotation time
 }
 
-// NewRotatedWriter 创建新的轮转写入器
+// NewRotatedWriter creates new rotated writer
 func NewRotatedWriter(filePath string, maxSize, maxAge, maxBackups int) (*RotatedWriter, error) {
 	if maxSize <= 0 {
-		maxSize = 100 // 默认100MB
+		maxSize = 100 // default 100MB
 	}
 	if maxAge <= 0 {
-		maxAge = 7 // 默认7天
+		maxAge = 7 // default 7 days
 	}
 	if maxBackups <= 0 {
-		maxBackups = 5 // 默认5个备份
+		maxBackups = 5 // default 5 backups
 	}
 
-	// 确保目录存在
+	// ensure directory exists
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, errors.WrapE(err, "create log directory", "directory", dir)
 	}
 
-	// 生成当前日志文件名
+	// generate current log filename
 	currentName := fmt.Sprintf("%s.%s", filepath.Base(filePath), time.Now().Format("2006-01-02"))
 	fullPath := filepath.Join(dir, currentName)
 
-	// 打开或创建日志文件
+	// open or create log file
 	file, err := os.OpenFile(fullPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, errors.WrapE(err, "open log file", "filename", fullPath)
 	}
 
-	// 获取当前文件大小
+	// get current file size
 	stat, err := file.Stat()
 	var currentSize int64
 	if err != nil {
@@ -62,7 +62,7 @@ func NewRotatedWriter(filePath string, maxSize, maxAge, maxBackups int) (*Rotate
 		currentSize = stat.Size()
 	}
 
-	// 清理旧日志文件
+	// clean up old log files
 	go func() {
 		cleanupOldLogs(dir, filepath.Base(filePath), maxAge, maxBackups)
 	}()
@@ -75,22 +75,22 @@ func NewRotatedWriter(filePath string, maxSize, maxAge, maxBackups int) (*Rotate
 		maxBackups:   maxBackups,
 		currentSize:  currentSize,
 		currentName:  currentName,
-		rotationTime: time.Hour * 24, // 每天轮转一次
+		rotationTime: time.Hour * 24, // rotate once per day
 		lastRotation: time.Now(),
 	}, nil
 }
 
-// Write 写入数据到日志文件
+// Write writes data to log file
 func (w *RotatedWriter) Write(p []byte) (n int, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// 检查是否需要轮转
+	// check if rotation is needed
 	if err := w.checkRotation(len(p)); err != nil {
 		return 0, err
 	}
 
-	// 写入数据
+	// write data
 	n, err = w.file.Write(p)
 	if err == nil {
 		w.currentSize += int64(n)
@@ -99,18 +99,18 @@ func (w *RotatedWriter) Write(p []byte) (n int, err error) {
 	return n, err
 }
 
-// checkRotation 检查是否需要轮转
+// checkRotation checks if rotation is needed
 func (w *RotatedWriter) checkRotation(additionalSize int) error {
 	now := time.Now()
 	needRotation := false
 
-	// 检查文件大小
+	// check file size
 	sizeLimit := int64(w.maxSize) * 1024 * 1024
 	if w.currentSize+int64(additionalSize) > sizeLimit {
 		needRotation = true
 	}
 
-	// 检查时间（每天轮转）
+	// check time (rotate once per day)
 	if now.Sub(w.lastRotation) >= w.rotationTime {
 		needRotation = true
 	}
@@ -122,33 +122,33 @@ func (w *RotatedWriter) checkRotation(additionalSize int) error {
 	return nil
 }
 
-// rotate 执行日志轮转
+// rotate performs log rotation
 func (w *RotatedWriter) rotate() error {
-	// 关闭当前文件
+	// close current file
 	if err := w.file.Close(); err != nil {
 		return err
 	}
 
-	// 生成新的文件名（使用时间戳）
+	// generate new filename (with timestamp)
 	now := time.Now()
 	oldName := w.currentName
 	newName := fmt.Sprintf("%s.%s", filepath.Base(w.filePath), now.Format("2006-01-02"))
 	oldFullPath := filepath.Join(filepath.Dir(w.filePath), oldName)
 	newFullPath := filepath.Join(filepath.Dir(w.filePath), newName)
 
-	// 如果旧文件存在且不是当前文件，进行轮转
+	// if old file exists and is not current file, perform rotation
 	if oldName != newName {
 		if _, err := os.Stat(oldFullPath); err == nil {
-			// 对旧文件进行压缩或重命名
+			// compress or rename old file
 			backupName := fmt.Sprintf("%s.%d", oldName, now.Unix())
 			backupPath := filepath.Join(filepath.Dir(w.filePath), backupName)
 			if err := os.Rename(oldFullPath, backupPath); err != nil {
-				// 如果重命名失败，继续
+				// if rename fails, continue
 			}
 		}
 	}
 
-	// 创建新文件
+	// create new file
 	file, err := os.OpenFile(newFullPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -159,7 +159,7 @@ func (w *RotatedWriter) rotate() error {
 	w.currentSize = 0
 	w.lastRotation = now
 
-	// 清理旧日志文件
+	// clean up old log files
 	go func() {
 		w.cleanupOldLogs()
 	}()
@@ -167,7 +167,7 @@ func (w *RotatedWriter) rotate() error {
 	return nil
 }
 
-// cleanupOldLogs 清理旧日志文件
+// cleanupOldLogs cleans up old log files
 func (w *RotatedWriter) cleanupOldLogs() {
 	dir := filepath.Dir(w.filePath)
 	prefix := filepath.Base(w.filePath)
@@ -175,7 +175,7 @@ func (w *RotatedWriter) cleanupOldLogs() {
 	cleanupOldLogs(dir, prefix, w.maxAge, w.maxBackups)
 }
 
-// // cleanupOldLogs 清理指定目录下的旧日志
+// cleanupOldLogs cleans up old log files in specified directory
 func cleanupOldLogs(dir, prefix string, maxAge, maxBackups int) {
 	files, err := os.ReadDir(dir)
 	if err != nil {
@@ -198,7 +198,7 @@ func cleanupOldLogs(dir, prefix string, maxAge, maxBackups int) {
 		}
 	}
 
-	// 按时间排序（最新的在前）
+	// sort by time (newest first)
 	for i := 0; i < len(logFiles); i++ {
 		for j := i + 1; j < len(logFiles); j++ {
 			if logFiles[i].modTime.Before(logFiles[j].modTime) {
@@ -207,7 +207,7 @@ func cleanupOldLogs(dir, prefix string, maxAge, maxBackups int) {
 		}
 	}
 
-	// 删除超过数量的旧文件
+	// delete old files exceeding count limit
 	if len(logFiles) > maxBackups {
 		for i := 0; i < len(logFiles)-maxBackups; i++ {
 			filePath := filepath.Join(dir, logFiles[i].name)
@@ -215,7 +215,7 @@ func cleanupOldLogs(dir, prefix string, maxAge, maxBackups int) {
 		}
 	}
 
-	// 删除超过天数的旧文件
+	// delete old files exceeding age limit
 	cutoffTime := time.Now().AddDate(0, 0, -maxAge)
 	for _, file := range logFiles {
 		if file.modTime.Before(cutoffTime) {
@@ -225,7 +225,7 @@ func cleanupOldLogs(dir, prefix string, maxAge, maxBackups int) {
 	}
 }
 
-// Close 关闭日志文件
+// Close closes log file
 func (w *RotatedWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -233,7 +233,7 @@ func (w *RotatedWriter) Close() error {
 	return w.file.Close()
 }
 
-// Sync 同步文件内容到磁盘
+// Sync syncs file content to disk
 func (w *RotatedWriter) Sync() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -241,7 +241,7 @@ func (w *RotatedWriter) Sync() error {
 	return w.file.Sync()
 }
 
-// Stat 获取当前文件状态
+// Stat gets current file status
 func (w *RotatedWriter) Stat() (os.FileInfo, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

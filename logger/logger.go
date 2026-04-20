@@ -12,7 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// Logger 封装 logrus.Logger 的统一日志接口
+// Logger is a unified logging interface that wraps logrus.Logger
 type Logger struct {
 	*logrus.Logger
 	mu            sync.Mutex
@@ -40,14 +40,14 @@ func NewLogger(cfg *Config) (*Logger, error) {
 	var rotatedWriter *RotatedWriter
 	var outputWriter io.Writer
 
-	// 设置日志级别
+	// Set log level
 	level, err := logrus.ParseLevel(cfg.Level)
 	if err != nil {
 		level = logrus.InfoLevel
 	}
 	logrusLogger.SetLevel(level)
 
-	// 设置日志格式
+	// Set log format
 	var formatter logrus.Formatter
 	switch strings.ToLower(cfg.Format) {
 	case "text":

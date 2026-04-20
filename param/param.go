@@ -328,10 +328,10 @@ func getValueInternal(
 }
 
 // getEnvKey automatically derives environment variable name from parameter name
-// For example: app-id → APP_ID, cluster-name → CLUSTER_NAME
+// For example: app-id -> APP_ID, cluster-name -> CLUSTER_NAME
 func getEnvKey(name string) string {
 	// Convert command line parameter name to environment variable name
-	// app-id → APP_ID, app-id2 → APP_ID2
+	// app-id -> APP_ID, app-id2 -> APP_ID2
 	envKey := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 	return envKey
 }
