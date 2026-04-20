@@ -43,13 +43,13 @@ func TestLoggerWithFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 测试 WithField
+	// Test WithField
 	logger1 := logger.WithField("key", "value")
 	if logger1 == nil {
 		t.Fatal("WithField returned nil")
 	}
 
-	// 测试 WithFields
+	// Test WithFields
 	logger2 := logger.WithFields(logrus.Fields{
 		"field1": "value1",
 		"field2": "value2",
@@ -71,7 +71,7 @@ func TestLoggerSetLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 测试设置级别
+	// Test setting level
 	if err := logger.SetLevel("debug"); err != nil {
 		t.Errorf("Failed to set level: %v", err)
 	}
@@ -80,14 +80,14 @@ func TestLoggerSetLevel(t *testing.T) {
 		t.Errorf("Expected level 'debug', got '%s'", logger.GetLevel())
 	}
 
-	// 测试无效级别
+	// Test invalid level
 	if err := logger.SetLevel("invalid"); err == nil {
 		t.Error("Expected error for invalid level")
 	}
 }
 
 func TestConfigLoadFromEnv(t *testing.T) {
-	// 设置环境变量
+	// Set environment variables
 	os.Setenv("LOG_LEVEL", "debug")
 	os.Setenv("LOG_FORMAT", "text")
 	defer func() {
@@ -106,7 +106,7 @@ func TestConfigLoadFromEnv(t *testing.T) {
 }
 
 func TestConfigValidate(t *testing.T) {
-	// 测试有效配置
+	// Test valid configuration
 	cfg := &Config{
 		Level:  "info",
 		Format: "json",
@@ -117,13 +117,13 @@ func TestConfigValidate(t *testing.T) {
 		t.Errorf("Valid config should not return error: %v", err)
 	}
 
-	// 测试无效级别
+	// Test invalid level
 	cfg.Level = "invalid"
 	if err := cfg.Validate(); err == nil {
 		t.Error("Invalid level should return error")
 	}
 
-	// 测试无效格式
+	// Test invalid format
 	cfg.Level = "info"
 	cfg.Format = "invalid"
 	if err := cfg.Validate(); err == nil {
@@ -143,7 +143,7 @@ func TestConfigToJSON(t *testing.T) {
 		t.Error("ToJSON returned empty string")
 	}
 
-	// 验证 JSON 格式
+	// Validate JSON format
 	var result map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
 		t.Errorf("Invalid JSON: %v", err)
@@ -151,13 +151,13 @@ func TestConfigToJSON(t *testing.T) {
 }
 
 func TestGlobalLogger(t *testing.T) {
-	// 测试获取全局日志实例
+	// Test getting global logger instance
 	logger := Global()
 	if logger == nil {
 		t.Fatal("Global logger is nil")
 	}
 
-	// 测试初始化全局日志
+	// Test initializing global logger
 	cfg := &Config{
 		Level:  "debug",
 		Format: "json",
@@ -168,7 +168,7 @@ func TestGlobalLogger(t *testing.T) {
 		t.Errorf("Failed to init global logger: %v", err)
 	}
 
-	// 验证全局日志已更新
+	// Verify global logger was updated
 	newLogger := Global()
 	if newLogger.GetLevel() != "debug" {
 		t.Errorf("Expected global logger level 'debug', got '%s'", newLogger.GetLevel())
@@ -187,10 +187,10 @@ func TestLoggerCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 添加字段
+	// Add field
 	logger1 := logger.WithField("key", "value")
 
-	// 复制
+	// Copy
 	logger2 := logger1.Copy()
 	if logger2 == nil {
 		t.Fatal("Copy returned nil")
@@ -209,7 +209,7 @@ func TestLoggerIsLevelEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// WARN 级别应该启用 WARN、ERROR、FATAL
+	// WARN level should enable WARN, ERROR, FATAL
 	if !logger.IsLevelEnabled(logrus.WarnLevel) {
 		t.Error("WARN level should be enabled")
 	}
@@ -220,7 +220,7 @@ func TestLoggerIsLevelEnabled(t *testing.T) {
 		t.Error("FATAL level should be enabled")
 	}
 
-	// 但 DEBUG、INFO 应该禁用
+	// But DEBUG, INFO should be disabled
 	if logger.IsLevelEnabled(logrus.DebugLevel) {
 		t.Error("DEBUG level should be disabled")
 	}
@@ -230,7 +230,7 @@ func TestLoggerIsLevelEnabled(t *testing.T) {
 }
 
 func TestRotatedWriter(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	dir, err := os.MkdirTemp("", "logtest")
 	if err != nil {
 		t.Fatal(err)
@@ -239,14 +239,14 @@ func TestRotatedWriter(t *testing.T) {
 
 	filePath := filepath.Join(dir, "test.log")
 
-	// 创建轮转写入器
+	// Create rotated writer
 	writer, err := NewRotatedWriter(filePath, 1, 7, 3)
 	if err != nil {
 		t.Fatalf("Failed to create rotated writer: %v", err)
 	}
 	defer writer.Close()
 
-	// 写入数据
+	// Write data
 	data := []byte("test log entry\n")
 	if n, err := writer.Write(data); err != nil {
 		t.Errorf("Write failed: %v", err)
@@ -254,7 +254,7 @@ func TestRotatedWriter(t *testing.T) {
 		t.Errorf("Expected to write %d bytes, wrote %d", len(data), n)
 	}
 
-	// 同步
+	// Sync
 	if err := writer.Sync(); err != nil {
 		t.Errorf("Sync failed: %v", err)
 	}
@@ -263,28 +263,28 @@ func TestRotatedWriter(t *testing.T) {
 func TestAsyncWriter(t *testing.T) {
 	var buf bytes.Buffer
 
-	// 创建异步写入器
+	// Create async writer
 	asyncWriter := NewAsyncWriter(&buf, 100, 10)
 	asyncWriter.SetFormatter(&logrus.JSONFormatter{DisableTimestamp: true})
 
-	// 启动异步写入
+	// Start async writing
 	asyncWriter.Start()
 
-	// 创建测试日志条目
+	// Create test log entry
 	entry := &logrus.Entry{
 		Message: "test message",
 		Level:   logrus.InfoLevel,
 	}
 
-	// 写入日志
+	// Write log
 	if err := asyncWriter.WriteEntry(entry); err != nil {
 		t.Errorf("WriteEntry failed: %v", err)
 	}
 
-	// 停止异步写入器，这会等待所有日志写入完成
+	// Stop async writer, which waits for all logs to complete
 	asyncWriter.Stop()
 
-	// 验证日志内容
+	// Verify log content
 	if buf.Len() == 0 {
 		t.Error("No log written to buffer")
 	}

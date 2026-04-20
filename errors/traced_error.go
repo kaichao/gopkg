@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// TracedError 追踪错误
+// TracedError represents an error with tracing information.
 type TracedError struct {
 	Message   string         // Error message
 	Code      int            // Error code for programmatic handling (optional, default -1)

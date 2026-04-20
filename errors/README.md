@@ -1,33 +1,17 @@
-# Errors Package
+# errors
 
 Enhanced error handling for Go with tracing, context, and error codes.
 
-## Overview
+## Features
 
-The `errors` package provides a comprehensive error handling system with:
 - Error tracing with stack information
-- Context key-value pairs
-- Integer error codes
-- Error chain support
-- Standard `errors` package compatibility
+- Context key-value pairs for structured error data
+- Integer error codes for programmatic handling
+- Error chain support (compatible with standard errors package)
+- Flexible error creation with E() function
 
-## Core Types
+## Quick Start
 
-### TracedError
-```go
-type TracedError struct {
-    Message   string         // Error message
-    Code      int            // Error code (default -1)
-    Location  string         // File:line:function
-    Timestamp time.Time      // When it happened
-    Context   map[string]any // Context information
-    Cause     *TracedError   // Underlying cause
-}
-```
-
-## Basic Usage
-
-### Creating Errors
 ```go
 import "github.com/kaichao/gopkg/errors"
 
@@ -41,107 +25,74 @@ err := errors.New("database connection failed", 1001)
 err := errors.New("validation failed").
     WithContext("field", "email").
     WithContext("value", "invalid@example.com")
-```
 
-### E() Function - Flexible Error Creation
-```go
-// Simple error
-err := errors.E("validation failed")
+// Flexible creation with E()
+err := errors.E("validation failed", "field", "email", "code", 400)
 
-// Error with context
-err := errors.E("validation failed", "field", "email", "value", "invalid@")
+// Wrap existing errors
+wrapped := errors.Wrap(originalErr, "operation failed")
 
-// Error with code
-err := errors.E(404, "not found")
-
-// Error with code and context
-err := errors.E(400, "validation failed", "field", "email")
-```
-
-### Wrapping Errors
-```go
-original := errors.New("original error")
-
-// Simple wrapping
-wrapped := errors.Wrap(original, "operation failed")
-
-// Flexible wrapping with WrapE
-wrapped := errors.WrapE(original, "query failed")
-wrapped := errors.WrapE(original, "query failed", "table", "users")
-wrapped := errors.WrapE(original, 500, "server error")
-wrapped := errors.WrapE(original, 404, "not found", "resource", "/api/users")
-```
-
-## Helper Functions
-
-### Must and MustValue
-```go
-// Panic on error
-errors.Must(someOperation())
-
-// Get value or panic
-value := errors.MustValue(someOperation())
-```
-
-### Error Code Utilities
-```go
-// Get error code
-code := errors.GetCode(err)
-if code == 404 {
-    // Handle 404 error
+// Error chain inspection
+if errors.Is(wrapped, sql.ErrNoRows) {
+    // Handle specific error type
 }
 ```
 
-## Error Chains
+## Core Types
 
-### Creating Chains
+### TracedError
 ```go
-root := errors.New("root cause")
-middle := errors.Wrap(root, "middle error")
-top := errors.Wrap(middle, "top error")
+type TracedError struct {
+    Message   string         // Error message
+    Code      int            // Error code (default -1)
+    Location  string         // File:line:function
+    Timestamp time.Time      // When it happened
+    Context   map[string]any // Context information
+}
 ```
 
-### Working with Chains
-```go
-// Get full chain
-chain := err.GetFullChain()
-for i, errInChain := range chain {
-    fmt.Printf("%d: %s\n", i, errInChain.Message)
-}
+## Functions
 
-// Format error chain
-formatted := err.Format()
-fmt.Print(formatted)
+### New
+Create a new traced error.
+```go
+errors.New("message")
+errors.New("message", code)
 ```
 
-## Standard Compatibility
-
-`TracedError` implements standard Go error interfaces:
-
+### E
+Flexible error creation with context.
 ```go
-// errors.Is support
-if errors.Is(err, targetError) {
-    // Error matches
-}
-
-// errors.As support
-var tracedErr *errors.TracedError
-if errors.As(err, &tracedErr) {
-    // Error is a TracedError
-}
-
-// errors.Unwrap support
-cause := errors.Unwrap(err)
+errors.E("message")
+errors.E("message", "key", value)
+errors.E(code, "message", "key", value)
 ```
 
-## Best Practices
+### Wrap
+Wrap an existing error.
+```go
+errors.Wrap(err, "wrapping message")
+```
 
-1. **Use error codes** for programmatic error handling
-2. **Add context** to errors for better debugging
-3. **Wrap errors** to preserve error chains
-4. **Use E() and WrapE()** for concise error creation
-5. **Check error codes** with GetCode() instead of string matching
+### WrapE
+Wrap with flexible syntax.
+```go
+errors.WrapE(err, "message")
+errors.WrapE(err, "message", "key", value)
+errors.WrapE(err, code, "message")
+```
+
+### Is/As
+Compatible with standard errors package.
+```go
+errors.Is(err, target)
+errors.As(err, &target)
+```
 
 ## Examples
 
-See `example_test.go` for comprehensive usage examples.
+See `examples/` directory for complete examples.
+
+## Documentation
+
+Run `go doc github.com/kaichao/gopkg/errors` for API documentation.
