@@ -1,112 +1,98 @@
 # exec
 
-English | [中文](README.zh.md)
+[![Go Reference](https://pkg.go.dev/badge/github.com/kaichao/gopkg/exec.svg)](https://pkg.go.dev/github.com/kaichao/gopkg/exec)
 
-## Table of Contents
-1. [Features](#features)
-2. [Use Cases](#use-cases)
-3. [Installation](#installation)
-4. [Quick Start](#quick-start)
-5. [API Reference](#api-reference)
-6. [Security Considerations](#security-considerations)
-7. [Best Practices](#best-practices)
-8. [Advanced Usage](#advanced-usage)
-9. [FAQ](#faq)
-10. [Testing](#testing)
+`exec` provides cross-environment command execution utilities for local and remote SSH environments.
 
 ## Features
 
-Cross-environment command execution toolkit with:
-
-- **Unified Interface**: Same API for local, remote SSH and container execution
+- **Unified Interface**: Same API for local and remote SSH execution
 - **Full Output Capture**: Synchronously captures stdout, stderr and exit code
 - **Flexible Timeout**: Supports both command-level and connection-level timeouts
 - **Multiple Auth Methods**: SSH supports key, password and agent forwarding
 - **Process Management**: Background process and process group support
-
-## Use Cases
-
-### Batch Server Operations
-```go
-// Execute maintenance commands across servers
-for _, host := range servers {
-    config.Host = host
-    exec.RunSSHCommand(config, "apt update && apt upgrade -y", 300)
-}
-```
-
-### CI/CD Pipelines
-```go
-// Post-deployment verification
-if code, out, _ := exec.RunReturnAll("curl -sSf http://localhost:8080/health", 10); code != 0 {
-    log.Fatal("Service health check failed")
-}
-```
-
-### Container Management
-```go
-// Run diagnostic commands in containers
-exec.RunSSHCommand(config, "singularity exec app.sif df -h", 30)
-```
+- **Circular Buffering**: 10MB output limit with circular buffer for large outputs
 
 ## Installation
 
-```sh
+```bash
 go get github.com/kaichao/gopkg/exec
 ```
 
 ## Quick Start
 
-### Local Execution
 ```go
-code, stdout, stderr, err := exec.RunReturnAll("ls -l /tmp", 10)
-if err != nil {
-    log.Printf("Execution failed: %v\nOutput: %s\nError: %s", err, stdout, stderr)
+package main
+
+import (
+	"fmt"
+	"log"
+	
+	"github.com/kaichao/gopkg/exec"
+)
+
+func main() {
+	// Local execution
+	code, stdout, stderr, err := exec.RunReturnAll("ls -l /tmp", 10)
+	if err != nil {
+		log.Printf("Execution failed: %v\nOutput: %s\nError: %s", err, stdout, stderr)
+	}
 }
 ```
 
-### SSH Remote Execution
-```go
-config := exec.SSHConfig{
-    User:    "admin",
-    Host:    "10.0.0.1", 
-    KeyPath: "/home/user/.ssh/id_rsa",
-}
+## Documentation
 
-// Execute and capture full output
-code, out, errOut, err := exec.RunSSHCommand(config, "docker ps -a", 30)
-```
+For complete documentation including all API functions, configuration options, and usage examples, see:
 
-### Container Execution
-```go
-// Run commands in Singularity container
-cmd := "singularity exec /images/debian.sif apt-get update"
-RunSSHCommand(config, cmd, 60)
-```
+- [Package Documentation](https://pkg.go.dev/github.com/kaichao/gopkg/exec)
+- [doc.go](./doc.go) - Detailed API reference with examples
+- [examples/basic/main.go](./examples/basic/main.go) - Basic usage examples
+- [examples/advanced/main.go](./examples/advanced/main.go) - Advanced scenarios including SSH
 
-## API Reference
+## Exit Code Convention
 
-### Core Methods
-```go
-// Local execution
-func RunReturnAll(command string, timeout int) (code int, stdout string, stderr string, err error)
+- `0`: Command executed successfully
+- `124`: Command timed out
+- `125`: Command execution failed (e.g., pipe creation, process start)
+- Other non-zero: Command-specific exit code
+- `128 + signal`: Command terminated by signal (e.g., SIGKILL = 128+9 = 137)
 
-// SSH execution 
-func RunSSHCommand(config SSHConfig, command string, timeout int) (code int, stdout string, stderr string, err error)
-```
+## SSH Configuration
 
-### SSHConfig Struct
 ```go
 type SSHConfig struct {
-    User       string // Required
-    Host       string // Required
-    Port       int    // Default 22
-    KeyPath    string // Preferred over password
-    Password   string 
-    Timeout    int    // Connection timeout (seconds)
-    Background bool   // Run command in background
+	User       string // Required: SSH username
+	Host       string // Required: SSH host
+	Port       int    // Optional: SSH port (default: 22)
+	KeyPath    string // Optional: Path to SSH private key (preferred over password)
+	Password   string // Optional: SSH password
+	Background bool   // Optional: Run command in background mode
+	UseHomeTmp bool   // Optional: Use ${HOME}/tmp instead of /tmp for temporary files
 }
 ```
+
+## Security Considerations
+
+1. **Authentication Security**
+   - Set SSH private key permissions to 600
+   - Avoid hardcoding passwords in source code
+
+2. **Command Injection Protection**
+   ```go
+   // Unsafe
+   cmd := fmt.Sprintf("ls %s", userInput)
+   
+   // Safer approach
+   cmd := fmt.Sprintf("ls %s", filepath.Clean(userInput))
+   ```
+
+3. **Logging**
+   - Record metadata for critical operations (user, command, timestamp)
+   - Avoid logging sensitive output
+
+## License
+
+MIT License
 
 ## Security Considerations
 

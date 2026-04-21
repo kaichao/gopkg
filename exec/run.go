@@ -2,7 +2,6 @@ package exec
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kaichao/gopkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -22,17 +22,17 @@ import (
 //   - timeout: timeout in seconds (0 for no timeout)
 //
 // Returns: (exitCode, stdout, stderr, err)
-//   - exitCode：命令的退出码（0 表示成功，非零表示命令失败或超时等）
-//   - stdout：标准输出
-//   - stderr：标准错误
-//   - err：执行过程中遇到的错误（如管道创建失败、命令启动失败、超时等）。若命令以非零退出码结束，err 为 nil
-//   - 管道创建或命令启动失败时，返回退出码 125 和具体的 error
-//   - 超时情况下，返回退出码 124 和 err = "command timed out"
-//   - 命令以非零退出码结束时，返回该退出码，err 为 nil
-//   - 其他未预期的错误通过 err 返回，退出码为 125
+//   - exitCode: command exit code (0 for success, non-zero for command failure or timeout)
+//   - stdout: standard output
+//   - stderr: standard error
+//   - err: error encountered during execution (e.g., pipe creation failure, command start failure, timeout). If command exits with non-zero exit code, err is nil
+//   - If pipe creation or command start fails, returns exit code 125 and specific error
+//   - In timeout case, returns exit code 124 and err = "command timed out"
+//   - If command ends with non-zero exit code, returns that exit code and err = nil
+//   - Other unexpected errors returned via err with exit code 125
 func RunReturnAll(command string, timeout int) (int, string, string, error) {
 	if command == "" {
-		return 125, "", "", fmt.Errorf("start command failed: empty command")
+		return 125, "", "", errors.E("start command failed: empty command")
 	}
 
 	baseCtx := context.Background()
@@ -43,9 +43,9 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 		defer cancel()
 	}
 
-	// 创建命令并支持进程组终止
-	// 在 bash 中开启严格模式，并在 EXIT 时清理仅子进程、保留原退出码
-	// 注意：对 pkill 加 “|| true”，避免其失败（无子进程）中断 Trap
+	// Create command with process group support
+	// Enable strict mode in bash and clean up only child processes on EXIT while preserving original exit code
+	// Note: Add "|| true" to pkill to avoid failure (no child processes) interrupting trap
 	bashCmd := command
 	if os.Getenv("STRICT_BASH_MODE") == "yes" {
 		bashCmd = `
@@ -56,26 +56,26 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 	cmd := exec.CommandContext(ctx, "/bin/bash", "-c", bashCmd)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	// 获取输出管道
+	// Get output pipes
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return 125, "", "", fmt.Errorf("capture stdout pipe failed: %v", err)
+		return 125, "", "", errors.WrapE(err, "capture stdout pipe failed")
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return 125, "", "", fmt.Errorf("capture stderr pipe failed: %v", err)
+		return 125, "", "", errors.WrapE(err, "capture stderr pipe failed")
 	}
 
-	// 使用环形缓冲区捕获输出
+	// Use circular buffer to capture output
 	const maxOutputSize = 10 * 1024 * 1024 // 10MB
 	stdoutBuf := NewCircularBuffer(maxOutputSize)
 	stderrBuf := NewCircularBuffer(maxOutputSize)
 
-	// 同时将输出写入 os.Stdout/os.Stderr 和环形缓冲区
+	// Write output to both os.Stdout/os.Stderr and circular buffers
 	stdoutWriter := io.MultiWriter(os.Stdout, stdoutBuf)
 	stderrWriter := io.MultiWriter(os.Stderr, stderrBuf)
 
-	// 异步捕获输出
+	// Capture output asynchronously
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -94,7 +94,7 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 		}
 	}()
 
-	// 超时后终止进程组
+	// Terminate process group after timeout
 	if timeout > 0 {
 		go func() {
 			<-ctx.Done()
@@ -104,17 +104,17 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 		}()
 	}
 
-	// 启动命令
+	// Start command
 	if err := cmd.Start(); err != nil {
-		return 125, "", "", fmt.Errorf("start command failed: %v", err)
+		return 125, "", "", errors.WrapE(err, "start command failed")
 	}
 
-	// 等待命令结束
+	// Wait for command to finish
 	waitErr := cmd.Wait()
-	// 确保输出复制完成
+	// Ensure output copying is complete
 	wg.Wait()
 
-	// 获取缓冲区中的数据
+	// Get data from buffers
 	stdoutBytes := stdoutBuf.Bytes()
 	stderrBytes := stderrBuf.Bytes()
 
@@ -122,15 +122,15 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 		return 0, string(stdoutBytes), string(stderrBytes), nil
 	}
 
-	// waitErr != nil, 处理退出码和错误
+	// waitErr != nil, handle exit code and errors
 	var exitCode int
 	var retErr error
 	if ctx.Err() == context.DeadlineExceeded {
 		exitCode = 124
-		retErr = fmt.Errorf("command timed out")
+		retErr = errors.E("command timed out")
 	} else if exitErr, ok := waitErr.(*exec.ExitError); ok {
 		exitCode = exitErr.ExitCode()
-		// 处理信号终止
+		// Handle signal termination
 		if exitCode == -1 {
 			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
 				if status.Signaled() {
@@ -138,7 +138,7 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 				}
 			}
 		}
-		// 命令以非零退出码结束，不是错误
+		// Command ended with non-zero exit code, not an error
 		retErr = nil
 	} else {
 		exitCode = 125
@@ -185,7 +185,7 @@ func RunWithRetries(cmd string, numRetries int, timeout int) int {
 	return code
 }
 
-// CircularBuffer 实现固定大小的环形缓冲区
+// CircularBuffer implements a fixed-size circular buffer
 type CircularBuffer struct {
 	buf    []byte
 	size   int
@@ -193,7 +193,7 @@ type CircularBuffer struct {
 	full   bool
 }
 
-// NewCircularBuffer 创建一个新的环形缓冲区
+// NewCircularBuffer creates a new circular buffer
 func NewCircularBuffer(size int) *CircularBuffer {
 	return &CircularBuffer{
 		buf:  make([]byte, size),
@@ -201,7 +201,7 @@ func NewCircularBuffer(size int) *CircularBuffer {
 	}
 }
 
-// Write 写入数据到环形缓冲区，超出部分覆盖最早数据
+// Write writes data to the circular buffer, overwriting oldest data when exceeding capacity
 func (c *CircularBuffer) Write(p []byte) (n int, err error) {
 	n = len(p)
 	for len(p) > 0 {
@@ -220,12 +220,12 @@ func (c *CircularBuffer) Write(p []byte) (n int, err error) {
 	return n, nil
 }
 
-// Bytes 返回缓冲区中的最新数据
+// Bytes returns the latest data from the buffer
 func (c *CircularBuffer) Bytes() []byte {
 	if !c.full {
 		return c.buf[:c.offset]
 	}
-	// 重构缓冲区，返回最新的 10MB 数据
+	// Reconstruct buffer to return the latest 10MB of data
 	result := make([]byte, c.size)
 	copy(result, c.buf[c.offset:])
 	copy(result[c.size-c.offset:], c.buf[:c.offset])

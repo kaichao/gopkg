@@ -16,7 +16,9 @@ Lightweight PostgreSQL bulk operations (COPY, INSERT, UPDATE) with batch process
 Generic database caching layer with SQL template support, automatic cache population, and configurable expiration via [go-cache](https://github.com/patrickmn/go-cache).
 
 ### 4. `exec`
-Cross-environment command executor (local/SSH) with stdout/stderr capture## 5. `errors`
+Cross-environment command executor (local/SSH) with stdout/stderr capture, timeout handling, and SSH support.
+
+### 5. `errors`
 Enhanced error handling with tracing, context, error codes, and standard `errors` package compatibility.
 
 ### 6. `logger`

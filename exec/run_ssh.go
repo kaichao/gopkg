@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kaichao/gopkg/errors"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -27,7 +28,7 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 
 	session, err := client.NewSession()
 	if err != nil {
-		return 125, "", "", fmt.Errorf("ssh: create session failed: %w", err)
+		return 125, "", "", errors.WrapE(err, "ssh: create session failed")
 	}
 	defer func() {
 		if session != nil {
@@ -44,112 +45,92 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 		stdoutBuf, stderrBuf, wg = captureOutput(ctx, session)
 
 		if err := session.Start(wrappedCmd); err != nil {
-			return 125, "", "", fmt.Errorf("start background command failed: %v", err)
+			// Clean up any processes that may have started
+			_ = cleanupProcesses(client, command, marker)
+			return 125, "", "", errors.WrapE(err, "start background command failed")
 		}
 
 		// For background mode, timeout only applies to command startup
-		exitCode, err = executeBackgroundCommand(session, ctx, client, stdoutBuf, stderrBuf, wg, marker)
-		if err != nil {
+		select {
+		case <-ctx.Done():
+			// Timeout during startup - clean up remote processes
 			_ = cleanupProcesses(client, command, marker)
-			return exitCode, stdoutBuf.String(), stderrBuf.String(), err
+			return 124, "", "", errors.E("background command timed out during startup")
+		default:
+			// Continue to read PID marker
 		}
 
-		// Parse stdout for PID marker
-		output := stdoutBuf.String()
-		lines := strings.Split(strings.TrimSpace(output), "\n")
+		// Wait for background command to write PID marker
+		wg.Wait()
+		if stdoutBuf.Len() == 0 {
+			_ = cleanupProcesses(client, command, marker)
+			return 125, "", "", errors.E("empty background command output")
+		}
+		pidLine := strings.TrimSpace(stdoutBuf.String())
+		lines := strings.Split(pidLine, "\n")
 		if len(lines) == 0 {
-			return 125, "", "", fmt.Errorf("empty background command output")
+			_ = cleanupProcesses(client, command, marker)
+			return 125, "", "", errors.E("empty background command output")
 		}
-
-		// Last line should be PID and marker
-		pidLine := lines[len(lines)-1]
+		pidLine = lines[0]
 		fields := strings.Fields(pidLine)
 		if len(fields) != 2 || !strings.HasPrefix(fields[1], "MARKER_") {
-			return 125, "", "", fmt.Errorf("invalid PID marker format, got: %q", pidLine)
+			_ = cleanupProcesses(client, command, marker)
+			return 125, "", "", errors.E("invalid PID marker format, got: %q", pidLine)
 		}
+		// Return PID as stdout, zero exit code
+		return 0, fields[1], "", nil
+	}
 
-		pidOutput := fields[0]
-		startupOutput := ""
-		if len(lines) > 1 {
-			startupOutput = strings.Join(lines[:len(lines)-1], "\n")
-		}
+	// Normal synchronous command execution
+	stdoutBuf, stderrBuf, wg = captureOutput(ctx, session)
+	if err := session.Start(command); err != nil {
+		return 125, "", "", errors.WrapE(err, "start command failed")
+	}
 
-		return 0, pidOutput, startupOutput, nil
-	} else {
-		stdoutBuf, stderrBuf, wg = captureOutput(ctx, session)
-		if err := session.Start(command); err != nil {
-			return 125, "", "", fmt.Errorf("start command failed: %v", err)
-		}
-		exitCode, err = executeCommand(session, ctx, client, stdoutBuf, stderrBuf, wg)
-		if err != nil {
-			return exitCode, stdoutBuf.String(), stderrBuf.String(), err
+	// Wait for command completion with timeout
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Wait()
+	}()
+
+	select {
+	case waitErr := <-done:
+		wg.Wait()
+		if waitErr != nil {
+			if exitErr, ok := waitErr.(*ssh.ExitError); ok {
+				exitCode = exitErr.ExitStatus()
+			} else {
+				exitCode = 125
+				return exitCode, "", "", waitErr
+			}
 		}
 		return exitCode, stdoutBuf.String(), stderrBuf.String(), nil
+	case <-ctx.Done():
+		// Timeout or cancellation
+		if ctx.Err() == context.DeadlineExceeded {
+			// Send SIGKILL to remote process and ensure cleanup
+			_ = session.Signal(ssh.SIGKILL)
+			_ = session.Close()
+			wg.Wait() // Wait for output buffers to be fully read
+			return 124, "", "", errors.E("command timed out")
+		}
+		return 125, "", "", ctx.Err()
 	}
 }
 
-// SSHConfig defines SSH connection parameters.
-type SSHConfig struct {
-	User       string
-	Host       string
-	Port       int
-	KeyPath    string // Path to private key file, empty for default (~/.ssh/id_rsa)
-	Password   string // Optional, if using password auth
-	Background bool   // If true, run command in background and return PID
-	UseHomeTmp bool   // If true, use ${HOME}/tmp instead of /tmp for temporary files
-}
-
-// defaultSSHKeyPath returns the default SSH key path, preferring id_ed25519 over id_rsa.
-func defaultSSHKeyPath() (string, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("get home dir failed: %v", err)
-	}
-
-	// Try common SSH key locations in order of preference
-	keyPaths := []string{
-		filepath.Join(homeDir, ".ssh", "id_ed25519"), // Preferred: more secure and faster
-		filepath.Join(homeDir, ".ssh", "id_rsa"),     // Fallback: traditional RSA key
-		filepath.Join(homeDir, ".ssh", "id_ecdsa"),   // Alternative: ECDSA key
-	}
-
-	for _, keyPath := range keyPaths {
-		if _, err := os.Stat(keyPath); err == nil {
-			return keyPath, nil
-		}
-	}
-
-	return "", fmt.Errorf("no default SSH key found in %s/.ssh/ (tried: id_ed25519, id_rsa, id_ecdsa)", homeDir)
-}
-
-// getAuthMethod returns the appropriate SSH authentication method based on config
-func getAuthMethod(config SSHConfig) (ssh.AuthMethod, error) {
-	if config.KeyPath == "" {
-		// Use default key path when KeyPath is explicitly empty
-		keyPath, err := defaultSSHKeyPath()
-		if err == nil {
-			config.KeyPath = keyPath
-		}
-	}
-	if config.KeyPath != "" {
-		key, err := os.ReadFile(config.KeyPath)
-		if err != nil {
-			return nil, fmt.Errorf("read key file failed: %v", err)
-		}
-		signer, err := ssh.ParsePrivateKey(key)
-		if err != nil {
-			return nil, fmt.Errorf("parse private key failed: %v", err)
-		}
-		return ssh.PublicKeys(signer), nil
-	}
-	if config.Password != "" {
-		return ssh.Password(config.Password), nil
-	}
-	return nil, fmt.Errorf("no authentication method provided")
-}
-
-// createSSHClient creates a new SSH client with timeout handling
+// createSSHClient creates SSH client and context for timeout management
 func createSSHClient(config SSHConfig, timeout int) (*ssh.Client, context.Context, context.CancelFunc, error) {
+	if config.Host == "" {
+		return nil, nil, nil, errors.E("empty host in SSH config")
+	}
+	if config.User == "" {
+		return nil, nil, nil, errors.E("empty user in SSH config")
+	}
+	if config.Port == 0 {
+		config.Port = 22
+	}
+
 	authMethod, err := getAuthMethod(config)
 	if err != nil {
 		return nil, nil, nil, err
@@ -159,6 +140,7 @@ func createSSHClient(config SSHConfig, timeout int) (*ssh.Client, context.Contex
 		User:            config.User,
 		Auth:            []ssh.AuthMethod{authMethod},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         30 * time.Second,
 	}
 
 	ctx := context.Background()
@@ -167,111 +149,78 @@ func createSSHClient(config SSHConfig, timeout int) (*ssh.Client, context.Contex
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	}
 
-	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", config.Host, config.Port), clientConfig)
+	// Establish SSH connection with retry
+	client, err := sshDialWithRetry(ctx, config, clientConfig, 3)
 	if err != nil {
+		// Clean up cancel function to avoid context leak
 		if cancel != nil {
 			cancel()
 		}
-		return nil, nil, nil, fmt.Errorf("ssh dial failed: %w", err)
+		return nil, nil, nil, errors.WrapE(err, "ssh dial failed")
 	}
+
 	return client, ctx, cancel, nil
 }
 
-// wrapCommand creates a wrapped command for background execution
-// useHomeTmp controls whether to use ${HOME}/tmp (true) or /tmp (false)
+// wrapCommand wraps command with PID marker for background execution
 func wrapCommand(command string, useHomeTmp bool) (string, string) {
 	marker := fmt.Sprintf("MARKER_%d", time.Now().UnixNano())
-
-	wrapped := `
-		tmp_dir="/tmp"
-		if ` + fmt.Sprintf("%t", useHomeTmp) + `; then
+	tmpDir := "/tmp"
+	if useHomeTmp {
+		if home, err := os.UserHomeDir(); err == nil {
+			tmpDir = filepath.Join(home, "tmp")
+		}
+	}
+	// Create wrapper script that:
+	// 1. Uses temp directory based on useHomeTmp
+	// 2. Creates a temporary script file
+	// 3. Executes command in background with proper process management
+	// 4. Returns actual PID and marker for validation
+	wrapper := fmt.Sprintf(`
+		tmp_dir="%s"
+		if %t; then
 			mkdir -p ${HOME}/tmp
 			tmp_dir="${HOME}/tmp"
 		fi
-		tmp_script=$(mktemp -p $tmp_dir)
-		chmod +x $tmp_script
+		tmp_script=$(mktemp -p "$tmp_dir")
+		chmod +x "$tmp_script"
 		
-		cat > $tmp_script <<'EOF'
+		cat > "$tmp_script" <<'EOF'
 #!/bin/bash
 # MARKER - used by tests to locate the process
-(` + command + `) &
+(%s) &
 real_pid=$!
-echo $real_pid "$marker"
-echo "$real_pid $marker" > $tmp_dir/real_pid
+echo "$real_pid" "$marker"
+echo "$real_pid $marker" > "$tmp_dir/real_pid"
 wait $real_pid
 EOF
 
-		nohup $tmp_script >/dev/null 2>&1 &
-		pid=$!
-		disown $pid
+		nohup "$tmp_script" >/dev/null 2>&1 &
+		wrapper_pid=$!
+		disown $wrapper_pid
 		sleep 0.5
-		
-		if [ -f $tmp_dir/real_pid ]; then
-			pid=$(cat $tmp_dir/real_pid)
+
+		if [ -f "$tmp_dir/real_pid" ]; then
+			real_pid=$(cat "$tmp_dir/real_pid")
+		else
+			real_pid=$wrapper_pid
 		fi
-		
+
 		sleep 0.5
-		if ps -p $pid >/dev/null 2>&1 || [ -d /proc/$pid ]; then
-			echo "$pid"
-			echo "$pid ` + marker + `"
+		if ps -p "$real_pid" >/dev/null 2>&1 || [ -d "/proc/$real_pid" ]; then
+			echo "$real_pid"
+			echo "$real_pid %s"
 		else
 			echo "0"
-			echo "0 ` + marker + `"
+			echo "0 %s"
 		fi
-		
-		rm -f $tmp_script $tmp_dir/real_pid
-	`
-	return wrapped, marker
+
+		rm -f "$tmp_script" "$tmp_dir/real_pid" 2>/dev/null || true
+	`, tmpDir, useHomeTmp, command, marker, marker)
+	return wrapper, marker
 }
 
-// wrapCommandWithDelay creates a wrapped command with startup delay for timeout testing
-func wrapCommandWithDelay(command string, useHomeTmp bool, delaySeconds int) (string, string) {
-	marker := fmt.Sprintf("MARKER_%d", time.Now().UnixNano())
-
-	wrapped := `
-		tmp_dir="/tmp"
-		if ` + fmt.Sprintf("%t", useHomeTmp) + `; then
-			mkdir -p ${HOME}/tmp
-			tmp_dir="${HOME}/tmp"
-		fi
-		tmp_script=$(mktemp -p $tmp_dir)
-		chmod +x $tmp_script
-		
-		cat > $tmp_script <<'EOF'
-#!/bin/bash
-# MARKER - used by tests to locate the process
-sleep ` + fmt.Sprintf("%d", delaySeconds) + `
-(` + command + `) &
-real_pid=$!
-echo $real_pid "$marker"
-echo "$real_pid $marker" > $tmp_dir/real_pid
-wait $real_pid
-EOF
-
-		nohup $tmp_script >/dev/null 2>&1 &
-		pid=$!
-		disown $pid
-		sleep 0.5
-		
-		if [ -f $tmp_dir/real_pid ]; then
-			pid=$(cat $tmp_dir/real_pid)
-		fi
-		
-		sleep 0.5
-		if ps -p $pid >/dev/null 2>&1 || [ -d /proc/$pid ]; then
-			echo "$pid"
-			echo "$pid ` + marker + `"
-		else
-			echo "0"
-			echo "0 ` + marker + `"
-		fi
-		
-		rm -f $tmp_script $tmp_dir/real_pid
-	`
-	return wrapped, marker
-}
-
-// captureOutput captures stdout/stderr from session
+// captureOutput captures stdout and stderr from SSH session with DEBUG line filtering
 func captureOutput(ctx context.Context, session *ssh.Session) (*bytes.Buffer, *bytes.Buffer, *sync.WaitGroup) {
 	stdoutPipe, _ := session.StdoutPipe()
 	stderrPipe, _ := session.StderrPipe()
@@ -308,17 +257,89 @@ func captureOutput(ctx context.Context, session *ssh.Session) (*bytes.Buffer, *b
 	return &stdoutBuf, &stderrBuf, &wg
 }
 
-// cleanupProcesses performs thorough cleanup of remote processes
+// defaultSSHKeyPath returns the default SSH key path, preferring id_ed25519 over id_rsa.
+func defaultSSHKeyPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", errors.WrapE(err, "get home dir failed")
+	}
+
+	// Try common SSH key locations in order of preference
+	keyPaths := []string{
+		filepath.Join(homeDir, ".ssh", "id_ed25519"), // Preferred: more secure and faster
+		filepath.Join(homeDir, ".ssh", "id_rsa"),     // Fallback: traditional RSA key
+		filepath.Join(homeDir, ".ssh", "id_ecdsa"),   // Alternative: ECDSA key
+	}
+
+	for _, keyPath := range keyPaths {
+		if _, err := os.Stat(keyPath); err == nil {
+			return keyPath, nil
+		}
+	}
+
+	return "", errors.E("no default SSH key found in %s/.ssh/ (tried: id_ed25519, id_rsa, id_ecdsa)", homeDir)
+}
+
+// getAuthMethod returns the appropriate SSH authentication method based on config
+func getAuthMethod(config SSHConfig) (ssh.AuthMethod, error) {
+	if config.KeyPath == "" {
+		// Use default key path when KeyPath is explicitly empty
+		keyPath, err := defaultSSHKeyPath()
+		if err == nil {
+			config.KeyPath = keyPath
+		}
+	}
+	if config.KeyPath != "" {
+		key, err := os.ReadFile(config.KeyPath)
+		if err != nil {
+			return nil, errors.WrapE(err, "read key file failed")
+		}
+		signer, err := ssh.ParsePrivateKey(key)
+		if err != nil {
+			return nil, errors.WrapE(err, "parse private key failed")
+		}
+		return ssh.PublicKeys(signer), nil
+	}
+	if config.Password != "" {
+		return ssh.Password(config.Password), nil
+	}
+	return nil, errors.E("no authentication method provided")
+}
+
+// sshDialWithRetry establishes SSH connection with retry logic
+func sshDialWithRetry(ctx context.Context, config SSHConfig, clientConfig *ssh.ClientConfig, attempts int) (*ssh.Client, error) {
+	var client *ssh.Client
+	var err error
+
+	for i := 0; i < attempts; i++ {
+		client, err = ssh.Dial("tcp", fmt.Sprintf("%s:%d", config.Host, config.Port), clientConfig)
+		if err == nil {
+			return client, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+			// Continue to next attempt
+		}
+	}
+	return nil, err
+}
+
+// cleanupProcesses cleans up remote processes and temporary files associated with a command
 func cleanupProcesses(client *ssh.Client, command string, marker string) error {
 	if client == nil {
 		return nil
 	}
 
 	cleanupCmds := []string{
-		fmt.Sprintf("pkill -9 -f '%s'", command),
-		fmt.Sprintf("pkill -9 -f '%s'", marker),
-		"pkill -9 -f 'sleep'",
-		"pkill -9 -f 'singularity'",
+		fmt.Sprintf("pkill -9 -f '%s' 2>/dev/null || true", command),
+		fmt.Sprintf("pkill -9 -f '%s' 2>/dev/null || true", marker),
+		"pkill -9 -f 'sleep' 2>/dev/null || true",
+		"pkill -9 -f 'singularity' 2>/dev/null || true",
+		// Clean up temporary files
+		fmt.Sprintf("rm -rf /tmp/ssh_wrapper_* 2>/dev/null || true"),
+		fmt.Sprintf("rm -rf ${HOME}/tmp/ssh_wrapper_* 2>/dev/null || true"),
 	}
 
 	for _, cmd := range cleanupCmds {
@@ -328,101 +349,18 @@ func cleanupProcesses(client *ssh.Client, command string, marker string) error {
 		}
 		_ = session.Run(cmd)
 		session.Close()
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 	return nil
 }
 
-// executeCommand runs the command and handles timeout
-func executeCommand(session *ssh.Session, ctx context.Context, client *ssh.Client,
-	stdoutBuf *bytes.Buffer, stderrBuf *bytes.Buffer, wg *sync.WaitGroup) (int, error) {
-	defer session.Close()
-
-	done := make(chan struct{})
-	var waitErr error
-
-	go func() {
-		waitErr = session.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-ctx.Done():
-		if ctx.Err() == context.DeadlineExceeded {
-			// Timeout occurred, clean all resources
-			_ = session.Signal(ssh.SIGKILL)
-			_ = session.Close()
-
-			// Close connection to release any locked pipe buffers
-			if client != nil {
-				client.Close()
-			}
-
-			wg.Wait()
-			return 124, fmt.Errorf("command timed out")
-		}
-	case <-done:
-	}
-	wg.Wait()
-
-	if waitErr != nil {
-		if exitErr, ok := waitErr.(*ssh.ExitError); ok {
-			return exitErr.ExitStatus(), nil
-		}
-		return 125, waitErr
-	}
-	return 0, nil
-}
-
-// executeBackgroundCommand runs the background command with proper timeout handling
-func executeBackgroundCommand(session *ssh.Session, ctx context.Context, client *ssh.Client,
-	stdoutBuf *bytes.Buffer, stderrBuf *bytes.Buffer, wg *sync.WaitGroup, marker string) (int, error) {
-	defer session.Close()
-
-	done := make(chan struct{})
-	var waitErr error
-
-	go func() {
-		waitErr = session.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-ctx.Done():
-		if ctx.Err() == context.DeadlineExceeded {
-			// Timeout occurred during background command startup
-			_ = session.Signal(ssh.SIGKILL)
-			_ = session.Close()
-
-			// Cleanup any processes started by the marker
-			_ = cleanupProcesses(client, "", marker)
-
-			wg.Wait()
-			return 124, fmt.Errorf("command timed out")
-		}
-	case <-done:
-	}
-	wg.Wait()
-
-	if waitErr != nil {
-		if exitErr, ok := waitErr.(*ssh.ExitError); ok {
-			return exitErr.ExitStatus(), nil
-		}
-		return 125, waitErr
-	}
-	return 0, nil
-}
-
-// retryDial attempts to establish SSH connection with retries
-func retryDial(config SSHConfig, clientConfig *ssh.ClientConfig, attempts int) (*ssh.Client, error) {
-	var client *ssh.Client
-	var err error
-	for i := 0; i < attempts; i++ {
-		client, err = ssh.Dial("tcp", fmt.Sprintf("%s:%d", config.Host, config.Port), clientConfig)
-		if err == nil {
-			return client, nil
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	return nil, err
+// SSHConfig defines SSH connection parameters
+type SSHConfig struct {
+	User       string
+	Host       string
+	Port       int
+	KeyPath    string // Path to private key file, empty for default (~/.ssh/id_rsa)
+	Password   string // Optional, if using password auth
+	Background bool   // If true, run command in background and return PID
+	UseHomeTmp bool   // If true, use ${HOME}/tmp instead of /tmp for temporary files
 }
