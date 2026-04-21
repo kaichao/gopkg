@@ -271,7 +271,8 @@ func TestLogErrorSimpleOverride(t *testing.T) {
 	os.Setenv("LOG_ERROR_VERBOSE", "false")
 	defer os.Unsetenv("LOG_ERROR_VERBOSE")
 
-	entry, buf := logger.NewTestEntry() // Use text formatter for easier testing
+	entry, buf := logger.NewTestEntry()      // Use text formatter for easier testing
+	entry.Logger.SetLevel(logrus.DebugLevel) // Allow debug messages to be logged
 	err := errors.New("error with simple override")
 	logger.LogError(err, entry, logrus.DebugLevel) // Debug level but should use simple
 

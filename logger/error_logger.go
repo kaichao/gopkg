@@ -31,6 +31,7 @@ func LogTracedError(err error, log *logrus.Entry, level ...logrus.Level) {
 		if tracedErr, ok := errInChain.(*errors.TracedError); ok {
 			fields := logrus.Fields{
 				"error_level": i, // 0 = outermost error
+				"error_type":  fmt.Sprintf("%T", errInChain),
 				"location":    tracedErr.Location,
 				"timestamp":   tracedErr.Timestamp,
 			}
@@ -57,6 +58,7 @@ func LogTracedError(err error, log *logrus.Entry, level ...logrus.Level) {
 			// Regular error in the chain
 			fields := logrus.Fields{
 				"error_level": i,
+				"error_type":  fmt.Sprintf("%T", errInChain),
 			}
 
 			if i == 0 {
