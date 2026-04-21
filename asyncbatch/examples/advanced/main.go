@@ -18,7 +18,7 @@ func main() {
 	var mu sync.Mutex
 	lastBatchTime := make(map[int]time.Time)
 
-	bp1, err := asyncbatch.NewBatchProcessor[int](
+	bp1, err := asyncbatch.NewBatchProcessor(
 		func(batch []int) {
 			count := len(batch)
 			totalProcessed.Add(int32(count))
@@ -54,7 +54,7 @@ func main() {
 	// Example 2: String processing with different configurations
 	fmt.Println("\n=== Example 2: String Processing with Dynamic Configuration ===")
 
-	bp2, err := asyncbatch.NewBatchProcessor[string](
+	bp2, err := asyncbatch.NewBatchProcessor(
 		func(batch []string) {
 			fmt.Printf("Processing strings: %v\n", batch[:min(3, len(batch))])
 			if len(batch) > 3 {
@@ -86,7 +86,7 @@ func main() {
 	fmt.Println("\n=== Example 3: Graceful Shutdown Example ===")
 
 	var shutdownProcessed atomic.Int32
-	bp3, err := asyncbatch.NewBatchProcessor[int](
+	bp3, err := asyncbatch.NewBatchProcessor(
 		func(batch []int) {
 			shutdownProcessed.Add(int32(len(batch)))
 			fmt.Printf("Shutdown batch processed %d items (total: %d)\n",

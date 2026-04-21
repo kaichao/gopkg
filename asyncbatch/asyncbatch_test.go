@@ -78,7 +78,7 @@ func TestBatchProcessor(t *testing.T) {
 		var wg sync.WaitGroup
 
 		// Create BatchProcessor with max batch size 10
-		bp, err := asyncbatch.NewBatchProcessor[string](
+		bp, err := asyncbatch.NewBatchProcessor(
 			func(batch []string) {
 				t.Logf("Processing batch of size %d: %v", len(batch), batch)
 				mu.Lock()
@@ -131,7 +131,7 @@ func TestBatchProcessor(t *testing.T) {
 		var wg sync.WaitGroup
 
 		// Initialize BatchProcessor with maxSize=6 and upperRatio=0.5
-		bp, err := asyncbatch.NewBatchProcessor[string](
+		bp, err := asyncbatch.NewBatchProcessor(
 			func(batch []string) {
 				t.Logf("Processing batch of size %d: %v", len(batch), batch)
 				mu.Lock()
@@ -185,7 +185,7 @@ func TestBatchProcessor(t *testing.T) {
 		var wg sync.WaitGroup
 
 		// Initialize BatchProcessor with maxSize=10
-		bp, err := asyncbatch.NewBatchProcessor[string](
+		bp, err := asyncbatch.NewBatchProcessor(
 			func(batch []string) {
 				t.Logf("Processing batch of size %d: %v", len(batch), batch)
 				mu.Lock()
@@ -236,7 +236,7 @@ func TestBatchProcessor(t *testing.T) {
 		var mu sync.Mutex
 		var batches [][]string
 
-		bp, err := asyncbatch.NewBatchProcessor[string](
+		bp, err := asyncbatch.NewBatchProcessor(
 			func(batch []string) {
 				t.Logf("Processing batch of size %d: %v", len(batch), batch)
 				mu.Lock()
@@ -268,7 +268,7 @@ func TestBatchProcessor(t *testing.T) {
 		var batches [][]string
 		var wg sync.WaitGroup
 
-		bp, err := asyncbatch.NewBatchProcessor[string](
+		bp, err := asyncbatch.NewBatchProcessor(
 			func(batch []string) {
 				t.Logf("Processing batch of size %d", len(batch))
 				mu.Lock()
@@ -305,7 +305,7 @@ func TestBatchProcessor(t *testing.T) {
 		var batches [][]string
 		var wg sync.WaitGroup
 
-		bp, err := asyncbatch.NewBatchProcessor[string](
+		bp, err := asyncbatch.NewBatchProcessor(
 			func(batch []string) {
 				t.Logf("Processing batch of size %d", len(batch))
 				mu.Lock()
@@ -338,7 +338,7 @@ func TestBatchProcessor(t *testing.T) {
 		var batches [][]string
 		var wg sync.WaitGroup
 
-		bp, err := asyncbatch.NewBatchProcessor[string](
+		bp, err := asyncbatch.NewBatchProcessor(
 			func(batch []string) {
 				t.Logf("Processing batch of size %d", len(batch))
 				mu.Lock()
@@ -375,7 +375,7 @@ func TestBatchProcessor(t *testing.T) {
 		var batches [][]string
 		var wg sync.WaitGroup
 
-		bp, err := asyncbatch.NewBatchProcessor[string](
+		bp, err := asyncbatch.NewBatchProcessor(
 			func(batch []string) {
 				t.Logf("Processing batch of size %d", len(batch))
 				mu.Lock()
@@ -418,7 +418,7 @@ func TestInvalidParameters(t *testing.T) {
 	})
 
 	t.Run("InvalidWaitTimes", func(t *testing.T) {
-		_, err := asyncbatch.NewBatchProcessor[string](
+		_, err := asyncbatch.NewBatchProcessor(
 			func([]string) {},
 			asyncbatch.WithFixedWait(500*time.Millisecond),
 			asyncbatch.WithUnderfilledWait(100*time.Millisecond),
@@ -429,7 +429,7 @@ func TestInvalidParameters(t *testing.T) {
 	})
 
 	t.Run("TooManyWorkers", func(t *testing.T) {
-		_, err := asyncbatch.NewBatchProcessor[string](
+		_, err := asyncbatch.NewBatchProcessor(
 			func([]string) {},
 			asyncbatch.WithNumWorkers(9),
 			asyncbatch.WithMaxSize(100),
@@ -442,7 +442,7 @@ func TestInvalidParameters(t *testing.T) {
 	})
 
 	t.Run("InvalidRatios", func(t *testing.T) {
-		_, err := asyncbatch.NewBatchProcessor[string](
+		_, err := asyncbatch.NewBatchProcessor(
 			func([]string) {},
 			asyncbatch.WithUpperRatio(0.2),
 			asyncbatch.WithLowerRatio(0.5),
@@ -459,7 +459,7 @@ func TestTinyRatios(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// 配置 BatchProcessor，upperRatio=0.001 导致每个批次上限为 1
-	bp, err := asyncbatch.NewBatchProcessor[string](
+	bp, err := asyncbatch.NewBatchProcessor(
 		func(batch []string) {
 			t.Logf("Processing micro batch of size %d: %v", len(batch), batch)
 			mu.Lock()
@@ -512,7 +512,7 @@ func TestTinyRatios(t *testing.T) {
 }
 
 func TestMultipleShutdown(t *testing.T) {
-	bp, err := asyncbatch.NewBatchProcessor[string](
+	bp, err := asyncbatch.NewBatchProcessor(
 		func([]string) {},
 		asyncbatch.WithMaxSize(10),
 		asyncbatch.WithUpperRatio(0.5),
@@ -529,7 +529,7 @@ func TestMultipleShutdown(t *testing.T) {
 }
 
 func TestGetterMethods(t *testing.T) {
-	bp, err := asyncbatch.NewBatchProcessor[string](
+	bp, err := asyncbatch.NewBatchProcessor(
 		func([]string) {},
 		asyncbatch.WithMaxSize(50),
 		asyncbatch.WithUpperRatio(0.7),
@@ -570,7 +570,7 @@ func BenchmarkBatchProcessor(b *testing.B) {
 	var mu sync.Mutex
 	var batchSizes []int
 
-	bp, _ := asyncbatch.NewBatchProcessor[string](
+	bp, _ := asyncbatch.NewBatchProcessor(
 		func(batch []string) {
 			mu.Lock()
 			batchSizes = append(batchSizes, len(batch))
@@ -613,7 +613,7 @@ func TestConcurrentAdd(t *testing.T) {
 	processed := make(map[int]struct{})
 	var wg sync.WaitGroup
 
-	bp, _ := asyncbatch.NewBatchProcessor[int](
+	bp, _ := asyncbatch.NewBatchProcessor(
 		func(batch []int) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -655,7 +655,7 @@ func TestConcurrentAdd(t *testing.T) {
 
 // 测试通道满时的处理逻辑
 func TestFullChannelBehavior(t *testing.T) {
-	bp, _ := asyncbatch.NewBatchProcessor[string](
+	bp, _ := asyncbatch.NewBatchProcessor(
 		func([]string) {},
 		asyncbatch.WithMaxSize(10),
 		asyncbatch.WithNumWorkers(1),
@@ -681,7 +681,7 @@ func TestFullChannelBehavior(t *testing.T) {
 	wg.Add(1)
 
 	// 创建新的 processor 来避免修改私有字段
-	newBp, _ := asyncbatch.NewBatchProcessor[string](
+	newBp, _ := asyncbatch.NewBatchProcessor(
 		func([]string) { wg.Done() },
 		asyncbatch.WithMaxSize(10),
 	)
@@ -698,7 +698,7 @@ func TestGracefulShutdown(t *testing.T) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	bp, _ := asyncbatch.NewBatchProcessor[int](
+	bp, _ := asyncbatch.NewBatchProcessor(
 		func(batch []int) {
 			mu.Lock()
 			processed += len(batch)
@@ -742,7 +742,7 @@ func TestGracefulShutdown(t *testing.T) {
 
 // 验证默认参数配置
 func TestDefaultConfiguration(t *testing.T) {
-	bp, err := asyncbatch.NewBatchProcessor[string](func([]string) {})
+	bp, err := asyncbatch.NewBatchProcessor(func([]string) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -781,7 +781,7 @@ func TestEdgeCaseBatchSplitting(t *testing.T) {
 				wg         sync.WaitGroup
 			)
 
-			bp, _ := asyncbatch.NewBatchProcessor[int](
+			bp, _ := asyncbatch.NewBatchProcessor(
 				func(batch []int) {
 					count := len(batch)
 					atomic.AddInt32(&batchCount, 1)

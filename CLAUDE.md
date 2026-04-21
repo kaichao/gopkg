@@ -10,13 +10,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```
 gopkg/
-├── asyncbatch/     # Asynchronous batch processor
-├── dbcache/        # Database caching layer
-├── errors/         # Enhanced error handling with tracing
-├── exec/           # Cross-environment command executor
-├── logger/         # Structured logging for traced errors
-├── param/          # Unified command line parameter management
-└── pgbulk/         # PostgreSQL bulk operations
+├── asyncbatch/     # Asynchronous batch processor with dynamic flow control
+├── dbcache/        # Database caching layer with SQL template support
+├── errors/         # Enhanced error handling with tracing and context
+├── exec/           # Cross-environment command executor (local/SSH)
+├── logger/         # Structured logging with error tracing and rotation
+├── param/          # Unified command line parameter management for Cobra
+└── pgbulk/         # PostgreSQL bulk operations (COPY, INSERT, UPDATE)
 ```
 
 ## Key Packages
@@ -60,25 +60,6 @@ log, err := logger.NewLogger(cfg)
 - **Multiple Output Formats**: Text and JSON support
 - **Thread Safety**: Safe for concurrent use
 
-**Methods:**
-```go
-// Standard logging
-log.Trace("message")
-log.Debug("message")
-log.Info("message")
-log.Warn("message")
-log.Error("message")
-
-// Structured logging
-log.WithField("key", "value").Info("message")
-log.WithFields(logrus.Fields{...}).Info("message")
-log.WithError(err).Error("error occurred")
-
-// Dynamic configuration
-log.SetLevel("debug")
-config := log.GetConfig()
-```
-
 #### **Error Logging Functions (For TracedError Integration)**
 
 ##### **LogError()** ⭐
@@ -103,75 +84,6 @@ config := log.GetConfig()
 - Filters passwords, tokens, API keys, and secrets
 - Suitable for production environments
 
-##### **Global Functions**
-- `InitGlobal(cfg *Config)` - Initialize global logger
-- `Global() *Logger` - Get global logger instance
-- `LogTracedErrorDefault(err error, level ...logrus.Level)` - Log using global logger
-- `SimpleLogDefault(err error, level ...logrus.Level)` - Simple log using global logger
-
-#### **Configuration**
-```go
-// Via Config struct
-cfg := &logger.Config{
-    Level:  "info",
-    Format: "json",
-    Output: "stdout",
-}
-log, _ := logger.NewLogger(cfg)
-
-// Via environment variables
-// LOG_LEVEL=debug LOG_FORMAT=json LOG_OUTPUT=file go run main.go
-cfg := logger.LoadConfig()
-log, _ := logger.NewLogger(cfg)
-
-// From JSON file
-log, _ := logger.NewLoggerFromConfigFile("config/logger.json")
-```
-
-#### **Async Logging**
-```go
-cfg := &logger.Config{
-    Level:        "info",
-    Format:       "json",
-    Output:       "stdout",
-    AsyncEnabled: true,
-    BufferSize:   2000,
-}
-log, _ := logger.NewLogger(cfg)
-defer log.Close() // Ensure all logs are flushed
-
-log.Info("This is logged asynchronously")
-```
-
-#### **Log Rotation**
-```go
-cfg := &logger.Config{
-    Level:      "info",
-    Format:     "json",
-    Output:     "file",
-    FilePath:   "/var/log/myapp/app.log",
-    MaxSize:    100,  // 100MB
-    MaxAge:     30,   // 30 days
-    MaxBackups: 10,   // Keep 10 backups
-}
-log, _ := logger.NewLogger(cfg)
-defer log.Close()
-```
-
-#### **Test Helpers**
-```go
-entry, buf := logger.NewTestEntry()      // Text formatter
-entry, buf := logger.NewJSONTestEntry()  // JSON formatter
-```
-
-#### **Sensitive Data Filtering**
-The `IsSensitiveKey()` function detects and filters:
-- Passwords: `password`, `user_password`, `password_hash`
-- Tokens: `token`, `api_token`, `access_token`
-- Secrets: `secret`, `secret_key`, `api_secret`
-- Credit info: `credit`, `credit_card`
-- Keys: `key`, `api_key`, `private_key` (specific patterns only)
-
 ### param Package
 The `param` package provides unified command line parameter management for Cobra with:
 
@@ -189,75 +101,66 @@ The `param` package provides unified command line parameter management for Cobra
 - **Parameter Validation**: Custom validation logic via `WithValidator`
 - **Required Parameters**: Mark parameters as required via `WithRequired`
 
-#### **Available Functions**
-- `GetInt(cmd *cobra.Command, name string, opts ...Option) (int, error)`
-- `GetString(cmd *cobra.Command, name string, opts ...Option) (string, error)`
-- `GetBool(cmd *cobra.Command, name string, opts ...Option) (bool, error)`
-- `GetDuration(cmd *cobra.Command, name string, opts ...Option) (time.Duration, error)`
-- `GetInt64(cmd *cobra.Command, name string, opts ...Option) (int64, error)`
-- `GetFloat64(cmd *cobra.Command, name string, opts ...Option) (float64, error)`
-- `GetStringSlice(cmd *cobra.Command, name string, opts ...Option) ([]string, error)`
+### asyncbatch Package
+Generic batch processor for asynchronous task processing with dynamic flow control and parallel execution.
 
-#### **Available Options**
-- `WithEnvKey(key string) Option` - Specify environment variable key
-- `WithDefault(val interface{}) Option` - Specify static default value
-- `WithDefaultFunc(f DefaultValueFunc) Option` - Specify dynamic default value function
-- `WithRequired() Option` - Mark parameter as required
-- `WithValidator(v func(interface{}) error) Option` - Add custom validator
+**Key Features:**
+- **Generic Support**: Type-safe processing for any task type
+- **Flexible Configuration**: Configure parameters via `With...` functions
+- **Dynamic Batching**: Adjusts batch triggering based on task count and timing
+- **Parallel Processing**: Multiple workers for concurrent batch processing
+- **Graceful Shutdown**: Safely processes remaining tasks before exiting
 
-#### **Usage Examples**
-```go
-import "github.com/spf13/cobra"
-import "github.com/kaichao/gopkg/param"
+**Configuration Parameters:**
+- `maxSize` (default 1000): Maximum tasks per batch
+- `lowerRatio` (default 0.1): Minimum ratio for underfilled batches
+- `fixedWait` (default 5ms): Wait time for initial task checks
+- `underfilledWait` (default 20ms): Wait time for underfilled batches
+- `numWorkers` (default 1): Number of parallel workers (1-8)
 
-// Basic usage: get integer parameter with automatic environment variable name derivation
-appID, err := param.GetInt(cmd, "app-id")
-if err != nil {
-    return err
-}
+### pgbulk Package
+Lightweight PostgreSQL bulk operations package for high-performance data operations.
 
-// With options: specify environment variable name, default value, and required flag
-cluster, err := param.GetString(cmd, "cluster",
-    param.WithEnvKey("MY_CLUSTER"),
-    param.WithDefault("default-cluster"),
-    param.WithRequired(),
-)
-if err != nil {
-    return err
-}
+**Features:**
+- **Batch Processing**: Automatically chunks large datasets into optimal batches
+- **SQL Templates**: Reusable templates with dynamic placeholders
+- **Full CRUD Support**: `INSERT`, `UPDATE`, and `INSERT...RETURNING` operations
+- **PG-Compatible**: Respects PostgreSQL's parameter limits
+- **Error Handling**: Enhanced error tracing with `github.com/kaichao/gopkg/errors`
 
-// Using dynamic default value function
-import "time"
-timeout, err := param.GetDuration(cmd, "timeout",
-    param.WithDefaultFunc(func() (interface{}, error) {
-        // Get default from config or database
-        return 30 * time.Second, nil
-    }),
-)
-if err != nil {
-    return err
-}
+**Key Functions:**
+- `Copy()`: Bulk insert using PostgreSQL's COPY command
+- `Insert()`: Insert data with optional ON CONFLICT clause
+- `InsertReturningID()`: Insert data and return IDs of inserted rows
+- `Update()`: Bulk update with error tracking
 
-// Using parameter validation
-import "github.com/kaichao/gopkg/errors"
-port, err := param.GetInt(cmd, "port",
-    param.WithValidator(func(v interface{}) error {
-        port := v.(int)
-        if port < 1 || port > 65535 {
-            return errors.E("port must be between 1 and 65535")
-        }
-        return nil
-    }),
-)
-if err != nil {
-    return err
-}
-```
+### dbcache Package
+Generic database caching layer with SQL template support and automatic cache population.
 
-#### **Environment Variable Name Derivation**
-Parameter names with "-" are replaced with "_" and converted to uppercase:
-- `app-id` → `APP_ID`
-- `cluster-name` → `CLUSTER_NAME`
+**Features:**
+- **SQL Templating**: Parameterized query support with $1, $2 placeholders
+- **Automatic Caching**: Transparent cache population on cache misses
+- **Type Safety**: Generics support for any data type
+- **Cache Control**: Configurable expiration and cleanup intervals
+- **Custom Loaders**: Optional custom loader functions for complex data loading
+
+### exec Package
+Cross-environment command execution utilities for local and remote SSH environments.
+
+**Features:**
+- **Unified Interface**: Same API for local and remote SSH execution
+- **Full Output Capture**: Synchronously captures stdout, stderr and exit code
+- **Flexible Timeout**: Supports both command-level and connection-level timeouts
+- **Multiple Auth Methods**: SSH supports key, password and agent forwarding
+- **Process Management**: Background process and process group support
+- **Circular Buffering**: 10MB output limit with circular buffer for large outputs
+
+**Exit Code Convention:**
+- `0`: Command executed successfully
+- `124`: Command timed out
+- `125`: Command execution failed
+- Other non-zero: Command-specific exit code
+- `128 + signal`: Command terminated by signal
 
 ## Development Commands
 
@@ -300,6 +203,7 @@ Key external dependencies:
 - `github.com/lib/pq` - PostgreSQL driver (legacy)
 - `github.com/patrickmn/go-cache` - In-memory cache
 - `github.com/sirupsen/logrus` - Structured logging
+- `github.com/spf13/cobra` - Command line interface
 - `github.com/stretchr/testify` - Testing utilities
 - `golang.org/x/crypto` - SSH support for exec package
 
@@ -324,6 +228,12 @@ The logger package automatically filters sensitive context fields:
 - API keys and private keys
 - Custom patterns can be added to `IsSensitiveKey()`
 
+### Package Integration Patterns
+- `errors` + `logger`: Use `LogTracedError()` for detailed error chain logging
+- `pgbulk` + `errors`: All bulk operations return enhanced traced errors
+- `param` + `cobra`: Simplifies command parameter handling with validation
+- `dbcache` + `go-cache`: Provides automatic database result caching
+
 ## Recent Changes
 
 The repository has recent commits focused on:
@@ -332,6 +242,7 @@ The repository has recent commits focused on:
 - Package-level Is, As, and Unwrap functions (feat)
 - Error handling enhancements and Location tracking fixes
 - Added param package for unified command line parameter management with Cobra (feat)
+- Comprehensive documentation improvements across all packages
 
 ## Testing
 
@@ -365,3 +276,104 @@ logger.SimpleLog(err, logEntry)
 if err := db.QueryRow(ctx, query).Scan(&result); err != nil {
     return errors.WrapE(err, "database query failed", "query", query)
 }
+```
+
+### Async Batch Processing
+```go
+bp, _ := asyncbatch.NewBatchProcessor[int](
+    func(batch []int) {
+        fmt.Printf("Processing batch: %v\n", batch)
+    },
+    asyncbatch.WithMaxSize(100),
+    asyncbatch.WithNumWorkers(2),
+)
+defer bp.Shutdown()
+
+for i := 0; i < 500; i++ {
+    bp.Add(i)
+}
+```
+
+### PostgreSQL Bulk Operations
+```go
+import (
+    "context"
+    "github.com/jackc/pgx/v5"
+    "github.com/kaichao/gopkg/pgbulk"
+)
+
+conn, _ := pgx.Connect(context.Background(), "postgres://user:password@localhost/dbname")
+
+// Bulk insert with ID returning
+ids, _ := pgbulk.InsertReturningID(conn, "INSERT INTO products (name, price)", [][]interface{}{
+    {"Product A", 99.99},
+    {"Product B", 149.99},
+})
+```
+
+### Database Caching
+```go
+import (
+    "database/sql"
+    "time"
+    "github.com/kaichao/gopkg/dbcache"
+)
+
+db, _ := sql.Open("postgres", "postgres://user:password@localhost/dbname")
+
+emailCache := dbcache.New[string](
+    db,
+    "SELECT email FROM users WHERE id = $1",
+    5*time.Minute,  // Cache expiration
+    10*time.Minute, // Cleanup interval
+    nil,            // Use default SQL loader
+)
+
+email, _ := emailCache.Get(123)
+```
+
+### Command Execution
+```go
+import "github.com/kaichao/gopkg/exec"
+
+// Local execution
+code, stdout, stderr, err := exec.RunReturnAll("ls -l /tmp", 10)
+
+// SSH execution
+sshConfig := exec.SSHConfig{
+    Host: "10.0.0.1",
+    User: "admin",
+    KeyPath: "/path/to/key",
+}
+code, stdout, stderr, err := exec.RunSSHCommand(sshConfig, "ps aux", 30)
+```
+
+### Parameter Management with Cobra
+```go
+import (
+    "github.com/spf13/cobra"
+    "github.com/kaichao/gopkg/param"
+)
+
+var rootCmd = &cobra.Command{
+    RunE: func(cmd *cobra.Command, args []string) error {
+        // Get integer parameter with automatic env var derivation
+        appID, err := param.GetInt(cmd, "app-id")
+        if err != nil {
+            return err
+        }
+
+        // Get required string parameter
+        cluster, err := param.GetString(cmd, "cluster",
+            param.WithRequired(),
+            param.WithDefault("default-cluster"),
+        )
+        if err != nil {
+            return err
+        }
+
+        // Use parameters...
+        return nil
+    },
+}
+```

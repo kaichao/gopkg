@@ -8,6 +8,7 @@ import (
 	"github.com/kaichao/gopkg/errors"
 )
 
+// Product ...
 type Product struct {
 	ID    int
 	Name  string
@@ -42,7 +43,7 @@ func main() {
 		}, nil
 	}
 
-	productCache := dbcache.New[Product](
+	productCache := dbcache.New(
 		nil, // No database connection needed for custom loader
 		"",  // No SQL template needed
 		time.Hour,
@@ -86,7 +87,7 @@ func main() {
 		return fmt.Sprintf("Settings for %s/%s", category, subcategory), nil
 	}
 
-	settingsCache := dbcache.New[string](
+	settingsCache := dbcache.New(
 		nil, // No database needed
 		"",
 		30*time.Minute,
@@ -132,7 +133,7 @@ func main() {
 
 	// Note: For truly dynamic expiration, you'd need to extend DBCache
 	// This example uses fixed expiration
-	configCache := dbcache.New[map[string]string](
+	configCache := dbcache.New(
 		nil,
 		"",
 		5*time.Minute, // Shorter expiration for configuration

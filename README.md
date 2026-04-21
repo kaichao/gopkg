@@ -22,7 +22,7 @@ Cross-environment command executor (local/SSH) with stdout/stderr capture, timeo
 Enhanced error handling with tracing, context, error codes, and standard `errors` package compatibility.
 
 ### 6. `logger`
-Structured logging for traced errors with sensitive data filtering, async output, log ration, and production-safe logging. Supports both detailed error chains (development) and filtered safe logs (production).
+Structured logging with error tracing, async output, log rotation, and sensitive data filtering. Supports both detailed error chains (development) and production-safe filtered logs. Features JSON/text formats, environment-based configuration, and seamless integration with `gopkg/errors`.
 
 ### 7. `param`
 Unified command line parameter management for Go with Cobra, supporting multiple data types, environment variables, dynamic defaults, and validation.

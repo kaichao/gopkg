@@ -15,7 +15,7 @@ func main() {
 	}
 
 	// Create a new BatchProcessor with custom options
-	bp, err := asyncbatch.NewBatchProcessor[int](
+	bp, err := asyncbatch.NewBatchProcessor(
 		worker,
 		asyncbatch.WithMaxSize(1000),
 		asyncbatch.WithUpperRatio(0.5),

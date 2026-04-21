@@ -19,11 +19,9 @@ func Update(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, ids [][]in
 		return nil, nil
 	}
 
-	// Modification: use timeout context to limit transaction time
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Start transaction
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return nil, errors.WrapE(err, "start transaction")
@@ -36,17 +34,14 @@ func Update(conn *pgx.Conn, sqlTemplate string, data [][]interface{}, ids [][]in
 		batch.Queue(sqlTemplate, params...)
 	}
 
-	// Send batch operations through transaction
 	br := tx.SendBatch(ctx, batch)
 
 	failedIds := [][]interface{}{}
 
-	// Modification: check each result to ensure capturing unique constraint errors
 	for i := 0; i < batch.Len(); i++ {
 		_, err := br.Exec()
 		if err != nil {
 			failedIds = append(failedIds, ids[i])
-			// Immediately close batch operation to ensure resource release
 			br.Close()
 			return failedIds, errors.WrapE(err, "batch execution", "record-num", i)
 		}
