@@ -28,7 +28,7 @@ func GetInt(cmd *cobra.Command, name string, opts ...Option) (int, error) {
 		func(v interface{}) bool {
 			intValue, ok := v.(int)
 			if !ok {
-				return true // if not int type, treat as invalid
+				return true // if not int type, treat as placeholder
 			}
 			return intValue == 0
 		},
@@ -60,7 +60,7 @@ func GetString(cmd *cobra.Command, name string, opts ...Option) (string, error) 
 		func(v interface{}) bool {
 			strValue, ok := v.(string)
 			if !ok {
-				return true // if not string type, treat as invalid
+				return true // if not string type, treat as placeholder
 			}
 			return strValue == ""
 		},
@@ -89,10 +89,10 @@ func GetBool(cmd *cobra.Command, name string, opts ...Option) (bool, error) {
 		},
 		false,
 		func(v interface{}) bool {
-			// For boolean types, false is a valid value (zero value), so always return true meaning "zero value is valid"
-			// Specific check is handled in getValueInternal via isFlagSetInCmd
+			// For boolean types, false is a valid value (not a placeholder),
+			// so always return false meaning "false is explicit, not a placeholder"
 			_, ok := v.(bool)
-			return !ok // if not bool type, treat as invalid
+			return !ok // if not bool type, treat as placeholder
 		},
 	)
 	if err != nil {
@@ -115,7 +115,15 @@ func GetDuration(cmd *cobra.Command, name string, opts ...Option) (time.Duration
 			return flags.GetDuration(name)
 		},
 		func(envValue string) (interface{}, error) {
-			return time.ParseDuration(envValue)
+			// Try standard duration format first (e.g., "30s", "5m")
+			if d, err := time.ParseDuration(envValue); err == nil {
+				return d, nil
+			}
+			// Fallback: try parsing as a plain number of seconds (e.g., "30" means 30s)
+			if seconds, err := strconv.ParseInt(envValue, 10, 64); err == nil {
+				return time.Duration(seconds) * time.Second, nil
+			}
+			return nil, fmt.Errorf("cannot parse '%s' as duration: try formats like '30s', '5m', '1h' or a plain number of seconds", envValue)
 		},
 		time.Duration(0),
 		func(v interface{}) bool {
@@ -128,7 +136,7 @@ func GetDuration(cmd *cobra.Command, name string, opts ...Option) (time.Duration
 			case int:
 				return val == 0
 			default:
-				return true // if not related type, treat as invalid
+				return true // if not related type, treat as placeholder
 			}
 		},
 	)
@@ -169,7 +177,7 @@ func GetInt64(cmd *cobra.Command, name string, opts ...Option) (int64, error) {
 			case int:
 				return val == 0
 			default:
-				return true // if not int/int64 type, treat as invalid
+				return true // if not int/int64 type, treat as placeholder
 			}
 		},
 	)
@@ -203,7 +211,7 @@ func GetFloat64(cmd *cobra.Command, name string, opts ...Option) (float64, error
 		func(v interface{}) bool {
 			floatValue, ok := v.(float64)
 			if !ok {
-				return true // if not float64 type, treat as invalid
+				return true // if not float64 type, treat as placeholder
 			}
 			return floatValue == 0.0
 		},
@@ -218,8 +226,22 @@ func GetFloat64(cmd *cobra.Command, name string, opts ...Option) (float64, error
 	return floatValue, nil
 }
 
+// preParseSeparator extracts a custom separator from options for GetStringSlice
+func preParseSeparator(opts []Option) string {
+	opt := &options{}
+	for _, o := range opts {
+		o(opt)
+	}
+	if opt.separator != "" {
+		return opt.separator
+	}
+	return ","
+}
+
 // GetStringSlice retrieves a string slice parameter with priority: command line > environment variable > default value
 func GetStringSlice(cmd *cobra.Command, name string, opts ...Option) ([]string, error) {
+	sep := preParseSeparator(opts)
+
 	value, err := getValueInternal(
 		cmd,
 		name,
@@ -228,14 +250,17 @@ func GetStringSlice(cmd *cobra.Command, name string, opts ...Option) ([]string, 
 			return flags.GetStringSlice(name)
 		},
 		func(envValue string) (interface{}, error) {
-			// Environment variable uses comma-separated strings
-			return strings.Split(envValue, ","), nil
+			// Use custom separator if provided, default to comma
+			if envValue == "" {
+				return []string{}, nil
+			}
+			return strings.Split(envValue, sep), nil
 		},
 		[]string(nil),
 		func(v interface{}) bool {
 			sliceValue, ok := v.([]string)
 			if !ok {
-				return true // if not []string type, treat as invalid
+				return true // if not []string type, treat as placeholder
 			}
 			return len(sliceValue) == 0
 		},
@@ -258,7 +283,7 @@ func getValueInternal(
 	flagGetter func(*pflag.FlagSet) (interface{}, error),
 	envParser func(string) (interface{}, error),
 	zeroValue interface{},
-	isZeroValid func(interface{}) bool, // Check if value is zero (for boolean types, zero value false may be valid)
+	isZeroPlaceholder func(interface{}) bool, // returns true if value is a zero placeholder (not explicitly set)
 ) (interface{}, error) {
 	// Parse options
 	opt := &options{}
@@ -268,48 +293,57 @@ func getValueInternal(
 	if opt.envKey == "" {
 		opt.envKey = getEnvKey(name)
 	}
+	if opt.separator == "" {
+		opt.separator = "," // default separator for string slice
+	}
 
-	// 1. Try to get from command line parameters
+	// 1. Try to get from command line parameters (only when explicitly set by user)
 	value, found, err := tryGetFlag(cmd, name, flagGetter)
 	if err != nil {
 		return zeroValue, err
 	}
 	if found {
-		// Only use if flag is explicitly set or value is non-zero (boolean types need special handling)
-		if isFlagSetInCmd(cmd, name) || !isZeroValid(value) {
-			if opt.validator != nil {
-				if err := opt.validator(value); err != nil {
-					return zeroValue, err
-				}
+		if opt.validator != nil {
+			if err := opt.validator(value); err != nil {
+				return zeroValue, errors.E(fmt.Sprintf("flag '%s' validation failed: %v", name, err))
 			}
-			return value, nil
 		}
+		return value, nil
 	}
 
 	// 2. Try to get from environment variable
-	if envValue := os.Getenv(opt.envKey); envValue != "" {
-		if value, err := envParser(envValue); err == nil {
-			if opt.validator != nil {
-				if err := opt.validator(value); err != nil {
-					return zeroValue, err
-				}
-			}
-			return value, nil
+	if envValue, envSet := os.LookupEnv(opt.envKey); envSet {
+		// Accept empty string as a valid value
+		parsedValue, err := envParser(envValue)
+		if err != nil {
+			return zeroValue, errors.E(fmt.Sprintf("environment variable '%s'='%s' parse error: %v", opt.envKey, envValue, err))
 		}
+		if opt.validator != nil {
+			if err := opt.validator(parsedValue); err != nil {
+				return zeroValue, errors.E(fmt.Sprintf("environment variable '%s' validation failed: %v", opt.envKey, err))
+			}
+		}
+		return parsedValue, nil
 	}
 
 	// 3. Check required parameter
 	if opt.required {
-		return zeroValue, errors.E(fmt.Sprintf("required parameter '%s' not provided", name))
+		return zeroValue, errors.E(fmt.Sprintf("required parameter '%s' not provided (set via --%s flag or %s environment variable)", name, name, opt.envKey))
 	}
 
 	// 4. Return default value
 	if opt.defaultVal != nil {
 		// Check if default value type matches expected type
 		if isTypeCompatible(opt.defaultVal, zeroValue) {
+			if opt.validator != nil {
+				if err := opt.validator(opt.defaultVal); err != nil {
+					return zeroValue, errors.E(fmt.Sprintf("default value for '%s' validation failed: %v", name, err))
+				}
+			}
 			return opt.defaultVal, nil
 		}
-		// Type mismatch: silently ignore and continue as per original behavior
+		// Type mismatch: warn but continue
+		fmt.Printf("param: warning: default value type %T does not match expected type for parameter '%s', ignoring\n", opt.defaultVal, name)
 	}
 
 	// 5. Try dynamic default value function
@@ -317,13 +351,32 @@ func getValueInternal(
 		if value, err := opt.defaultValFunc(); err == nil {
 			// Check if dynamic default value type matches expected type
 			if isTypeCompatible(value, zeroValue) {
+				if opt.validator != nil {
+					if err := opt.validator(value); err != nil {
+						return zeroValue, errors.E(fmt.Sprintf("dynamic default value for '%s' validation failed: %v", name, err))
+					}
+				}
 				return value, nil
 			}
-			// Type mismatch: silently ignore and continue as per original behavior
+			// Type mismatch: warn but continue
+			fmt.Printf("param: warning: dynamic default function returned type %T for parameter '%s', does not match expected type, ignoring\n", value, name)
+		} else {
+			// Dynamic default function error: propagate it since we have no other fallback
+			return zeroValue, errors.E(fmt.Sprintf("dynamic default function for '%s' failed: %v", name, err))
 		}
 	}
 
-	// 6. Return zero value
+	// 6. Try flag's built-in default value (as a fallback when no other default provided)
+	if flagValue, found, err := tryFlagDefault(cmd, name, flagGetter, isZeroPlaceholder); found && err == nil {
+		if opt.validator != nil {
+			if err := opt.validator(flagValue); err != nil {
+				return zeroValue, errors.E(fmt.Sprintf("flag '%s' default value validation failed: %v", name, err))
+			}
+		}
+		return flagValue, nil
+	}
+
+	// 7. Return zero value
 	return zeroValue, nil
 }
 
@@ -331,12 +384,12 @@ func getValueInternal(
 // For example: app-id -> APP_ID, cluster-name -> CLUSTER_NAME
 func getEnvKey(name string) string {
 	// Convert command line parameter name to environment variable name
-	// app-id -> APP_ID, app-id2 -> APP_ID2
-	envKey := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
-	return envKey
+	transformed := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+	return transformed
 }
 
-// tryGetFlag attempts to get value from command flags (tries local flags first, then persistent flags)
+// tryGetFlag attempts to get value from command flags (tries local flags first, then persistent flags).
+// Only returns found=true when the flag is explicitly set by the user.
 func tryGetFlag(cmd *cobra.Command, name string, getter func(*pflag.FlagSet) (interface{}, error)) (interface{}, bool, error) {
 	// First try local flags
 	if flag := cmd.Flag(name); flag != nil && flag.Changed {
@@ -350,31 +403,29 @@ func tryGetFlag(cmd *cobra.Command, name string, getter func(*pflag.FlagSet) (in
 			return value, true, nil
 		}
 	}
-	// Check if set elsewhere (handle errors)
-	if flag := cmd.Flag(name); flag != nil && flag.Changed {
-		// Local flag is set but retrieval failed, return error
-		if _, err := getter(cmd.Flags()); err != nil {
-			return nil, false, err
-		}
-	}
-	if flag := cmd.PersistentFlags().Lookup(name); flag != nil && flag.Changed {
-		// Persistent flag is set but retrieval failed, return error
-		if _, err := getter(cmd.PersistentFlags()); err != nil {
-			return nil, false, err
-		}
-	}
 	return nil, false, nil
 }
 
-// isFlagSetInCmd checks if command line flag is set (checks both local and persistent flags)
-func isFlagSetInCmd(cmd *cobra.Command, name string) bool {
-	if flag := cmd.Flag(name); flag != nil {
-		return flag.Changed
+// tryFlagDefault attempts to get the default value from a flag if the flag exists.
+// This is used as a fallback when no user-provided value, env var, or WithDefault is available.
+func tryFlagDefault(cmd *cobra.Command, name string, getter func(*pflag.FlagSet) (interface{}, error), isZeroPlaceholder func(interface{}) bool) (interface{}, bool, error) {
+	// First try local flags
+	if cmd.Flag(name) != nil {
+		if value, err := getter(cmd.Flags()); err == nil {
+			if !isZeroPlaceholder(value) {
+				return value, true, nil
+			}
+		}
 	}
-	if flag := cmd.PersistentFlags().Lookup(name); flag != nil {
-		return flag.Changed
+	// Then try persistent flags
+	if cmd.PersistentFlags().Lookup(name) != nil {
+		if value, err := getter(cmd.PersistentFlags()); err == nil {
+			if !isZeroPlaceholder(value) {
+				return value, true, nil
+			}
+		}
 	}
-	return false
+	return nil, false, nil
 }
 
 // isTypeCompatible checks if two values are type compatible

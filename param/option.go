@@ -12,6 +12,7 @@ type options struct {
 	defaultValFunc DefaultValueFunc
 	required       bool
 	validator      func(interface{}) error
+	separator      string // for StringSlice env parsing
 }
 
 // WithEnvKey specifies environment variable key
@@ -46,5 +47,13 @@ func WithRequired() Option {
 func WithValidator(v func(interface{}) error) Option {
 	return func(o *options) {
 		o.validator = v
+	}
+}
+
+// WithSeparator specifies the separator for string slice environment variable parsing.
+// Default is "," if not specified.
+func WithSeparator(sep string) Option {
+	return func(o *options) {
+		o.separator = sep
 	}
 }

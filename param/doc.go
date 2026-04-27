@@ -78,6 +78,7 @@
 //	WithDefault(val interface{}) Option  // Specify static default value
 //	WithDefaultFunc(f DefaultValueFunc) Option  // Specify dynamic default value function
 //	WithRequired() Option                // Mark parameter as required
+//	WithSeparator(sep string) Option     // Specify separator for StringSlice environment variable parsing (default: ",")
 //	WithValidator(v func(interface{}) error) Option  // Add custom validator
 //
 // Environment Variable Name Derivation:
