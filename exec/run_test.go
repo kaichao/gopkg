@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kaichao/gopkg/errors"
 	"github.com/kaichao/gopkg/exec"
 	"github.com/stretchr/testify/assert"
 )
@@ -120,5 +121,20 @@ func TestRunReturnAll(t *testing.T) {
 		assert.Equal(t, 0, code)
 		assert.True(t, len(out) <= 10*1024*1024) // 验证输出被正确截断
 		assert.Nil(t, err)
+	})
+
+	// 13. 返回码写入 error 中
+	t.Run("error code in returned error", func(t *testing.T) {
+		// 空命令: 返回码 125
+		code, _, _, err := exec.RunReturnAll("", 0)
+		assert.Equal(t, 125, code)
+		assert.NotNil(t, err)
+		assert.Equal(t, 125, errors.GetCode(err))
+
+		// 超时: 返回码 124
+		code, _, _, err = exec.RunReturnAll("sleep 5", 1)
+		assert.Equal(t, 124, code)
+		assert.NotNil(t, err)
+		assert.Equal(t, 124, errors.GetCode(err))
 	})
 }

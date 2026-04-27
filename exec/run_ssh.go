@@ -29,7 +29,7 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 
 	session, err := client.NewSession()
 	if err != nil {
-		return 125, "", "", errors.WrapE(err, "ssh: create session failed")
+		return 125, "", "", errors.WrapE(err, 125, "ssh: create session failed")
 	}
 	defer func() {
 		if session != nil {
@@ -48,7 +48,7 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 		if err := session.Start(wrappedCmd); err != nil {
 			// Clean up any processes that may have started
 			_ = cleanupProcesses(client, command, marker)
-			return 125, "", "", errors.WrapE(err, "start background command failed")
+			return 125, "", "", errors.WrapE(err, 125, "start background command failed")
 		}
 
 		// Use a dedicated startup context (10s) for background commands.
@@ -71,20 +71,20 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 		case <-startupCtx.Done():
 			// Timeout during startup - clean up remote processes
 			_ = cleanupProcesses(client, command, marker)
-			return 124, "", "", errors.E("background command timed out during startup")
+			return 124, "", "", errors.E(124, "background command timed out during startup")
 		}
 
 		// Wait for output goroutines to finish reading all data
 		wg.Wait()
 		if stdoutBuf.Len() == 0 {
 			_ = cleanupProcesses(client, command, marker)
-			return 125, "", "", errors.E("empty background command output")
+			return 125, "", "", errors.E(125, "empty background command output")
 		}
 		pidLine := strings.TrimSpace(stdoutBuf.String())
 		lines := strings.Split(pidLine, "\n")
 		if len(lines) == 0 {
 			_ = cleanupProcesses(client, command, marker)
-			return 125, "", "", errors.E("empty background command output")
+			return 125, "", "", errors.E(125, "empty background command output")
 		}
 
 		// Find the line with "PID MARKER_xxx" format (the second line from wrapCommand)
@@ -101,13 +101,13 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 		}
 
 		_ = cleanupProcesses(client, command, marker)
-		return 125, "", "", fmt.Errorf("invalid PID marker format, got: %q", pidLine)
+		return 125, "", "", errors.E(125, fmt.Sprintf("invalid PID marker format, got: %q", pidLine))
 	}
 
 	// Normal synchronous command execution
 	stdoutBuf, stderrBuf, wg = captureOutput(ctx, session)
 	if err := session.Start(command); err != nil {
-		return 125, "", "", errors.WrapE(err, "start command failed")
+		return 125, "", "", errors.WrapE(err, 125, "start command failed")
 	}
 
 	// Wait for command completion with timeout
@@ -124,7 +124,7 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 				exitCode = exitErr.ExitStatus()
 			} else {
 				exitCode = 125
-				return exitCode, "", "", waitErr
+				return exitCode, "", "", errors.WrapE(waitErr, 125, "unexpected command error")
 			}
 		}
 		return exitCode, stdoutBuf.String(), stderrBuf.String(), nil
@@ -145,19 +145,19 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 			stdout := stdoutBuf.String()
 			stderr := stderrBuf.String()
 			_ = session.Close()
-			return 124, stdout, stderr, errors.E("command timed out")
+			return 124, stdout, stderr, errors.E(124, "command timed out")
 		}
-		return 125, "", "", ctx.Err()
+		return 125, "", "", errors.WrapE(ctx.Err(), 125, "context cancelled")
 	}
 }
 
 // createSSHClient creates SSH client and context for timeout management
 func createSSHClient(config SSHConfig, timeout int) (*ssh.Client, context.Context, context.CancelFunc, error) {
 	if config.Host == "" {
-		return nil, nil, nil, errors.E("empty host in SSH config")
+		return nil, nil, nil, errors.E(125, "empty host in SSH config")
 	}
 	if config.User == "" {
-		return nil, nil, nil, errors.E("empty user in SSH config")
+		return nil, nil, nil, errors.E(125, "empty user in SSH config")
 	}
 	if config.Port == 0 {
 		config.Port = 22
@@ -188,7 +188,7 @@ func createSSHClient(config SSHConfig, timeout int) (*ssh.Client, context.Contex
 		if cancel != nil {
 			cancel()
 		}
-		return nil, nil, nil, errors.WrapE(err, "ssh dial failed")
+		return nil, nil, nil, errors.WrapE(err, 125, "ssh dial failed")
 	}
 
 	return client, ctx, cancel, nil
@@ -199,16 +199,20 @@ func createSSHClient(config SSHConfig, timeout int) (*ssh.Client, context.Contex
 // heredoc, no quoting issues). The command backgrounds the real command
 // with nohup, then immediately echoes its PID and exit code.
 // session.Wait() returns immediately after the echo.
+// If useHomeTmp is true, output is redirected to ${HOME}/tmp/nohup.out
+// instead of /dev/null, allowing debugging of background command output.
 func wrapCommand(command string, useHomeTmp bool) (string, string) {
 	marker := fmt.Sprintf("MARKER_%d", time.Now().UnixNano())
-	// Execute: nohup COMMAND >/dev/null 2>&1 & echo "$! MARKER"
-	// nohup makes the process survive SSH session closure.
-	// $! captures its PID.
-	// "echo $!" outputs the PID before command finishes.
-	// session.Wait() returns immediately.
-	wrapper := fmt.Sprintf(
-		"nohup %[2]s >/dev/null 2>&1 & echo \"$! %[1]s\"",
-		marker, command)
+	var wrapper string
+	if useHomeTmp {
+		wrapper = fmt.Sprintf(
+			"mkdir -p ${HOME}/tmp; nohup %s >${HOME}/tmp/nohup.out 2>&1 & echo \"$! %s\"",
+			command, marker)
+	} else {
+		wrapper = fmt.Sprintf(
+			"nohup %s >/dev/null 2>&1 & echo \"$! %s\"",
+			command, marker)
+	}
 	return wrapper, marker
 }
 
@@ -262,7 +266,7 @@ func captureOutput(ctx context.Context, session *ssh.Session) (*bytes.Buffer, *b
 func defaultSSHKeyPath() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return "", errors.WrapE(err, "get home dir failed")
+		return "", errors.WrapE(err, 125, "get home dir failed")
 	}
 
 	// Try common SSH key locations in order of preference
@@ -293,18 +297,18 @@ func getAuthMethod(config SSHConfig) (ssh.AuthMethod, error) {
 	if config.KeyPath != "" {
 		key, err := os.ReadFile(config.KeyPath)
 		if err != nil {
-			return nil, errors.WrapE(err, "read key file failed")
+			return nil, errors.WrapE(err, 125, "read key file failed")
 		}
 		signer, err := ssh.ParsePrivateKey(key)
 		if err != nil {
-			return nil, errors.WrapE(err, "parse private key failed")
+			return nil, errors.WrapE(err, 125, "parse private key failed")
 		}
 		return ssh.PublicKeys(signer), nil
 	}
 	if config.Password != "" {
 		return ssh.Password(config.Password), nil
 	}
-	return nil, errors.E("no authentication method provided")
+	return nil, errors.E(125, "no authentication method provided")
 }
 
 // sshDialWithRetry establishes SSH connection with retry logic

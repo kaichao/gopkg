@@ -32,7 +32,7 @@ import (
 //   - Other unexpected errors returned via err with exit code 125
 func RunReturnAll(command string, timeout int) (int, string, string, error) {
 	if command == "" {
-		return 125, "", "", errors.E("start command failed: empty command")
+		return 125, "", "", errors.E(125, "start command failed: empty command")
 	}
 
 	baseCtx := context.Background()
@@ -59,11 +59,11 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 	// Get output pipes
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return 125, "", "", errors.WrapE(err, "capture stdout pipe failed")
+		return 125, "", "", errors.WrapE(err, 125, "capture stdout pipe failed")
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return 125, "", "", errors.WrapE(err, "capture stderr pipe failed")
+		return 125, "", "", errors.WrapE(err, 125, "capture stderr pipe failed")
 	}
 
 	// Use circular buffer to capture output
@@ -92,7 +92,7 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 
 	// Start command
 	if err := cmd.Start(); err != nil {
-		return 125, "", "", errors.WrapE(err, "start command failed")
+		return 125, "", "", errors.WrapE(err, 125, "start command failed")
 	}
 
 	// Terminate process group after timeout
@@ -123,7 +123,7 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 	var retErr error
 	if ctx.Err() == context.DeadlineExceeded {
 		exitCode = 124
-		retErr = errors.E("command timed out")
+		retErr = errors.E(124, "command timed out")
 	} else if exitErr, ok := waitErr.(*exec.ExitError); ok {
 		exitCode = exitErr.ExitCode()
 		// Handle signal termination
@@ -138,7 +138,7 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 		retErr = nil
 	} else {
 		exitCode = 125
-		retErr = waitErr
+		retErr = errors.WrapE(waitErr, 125, "unexpected command error")
 	}
 	return exitCode, string(stdoutBytes), string(stderrBytes), retErr
 }

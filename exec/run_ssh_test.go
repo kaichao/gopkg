@@ -24,6 +24,38 @@ func init() {
 	}
 }
 
+func TestWrapCommand(t *testing.T) {
+	// Test with useHomeTmp = false (default behavior)
+	t.Run("useHomeTmp=false", func(t *testing.T) {
+		wrapper, marker := wrapCommand("echo hello", false)
+		assert.Contains(t, wrapper, "nohup")
+		assert.Contains(t, wrapper, ">/dev/null 2>&1")
+		assert.Contains(t, wrapper, marker)
+		assert.NotContains(t, wrapper, "${HOME}/tmp")
+		assert.Contains(t, wrapper, "echo hello")
+	})
+
+	// Test with useHomeTmp = true
+	t.Run("useHomeTmp=true", func(t *testing.T) {
+		wrapper, marker := wrapCommand("echo hello", true)
+		assert.Contains(t, wrapper, "nohup")
+		assert.Contains(t, wrapper, ">${HOME}/tmp/nohup.out 2>&1")
+		assert.Contains(t, wrapper, "mkdir -p ${HOME}/tmp")
+		assert.Contains(t, wrapper, marker)
+		assert.Contains(t, wrapper, "echo hello")
+	})
+
+	// Test that marker format is correct and unique (timestamps differ)
+	t.Run("unique marker", func(t *testing.T) {
+		wrapper1, marker1 := wrapCommand("echo test", false)
+		time.Sleep(time.Microsecond) // ensure different timestamp
+		wrapper2, marker2 := wrapCommand("echo test", false)
+		assert.NotEqual(t, marker1, marker2, "markers should be unique")
+		assert.Contains(t, wrapper1, marker1)
+		assert.Contains(t, wrapper2, marker2)
+	})
+}
+
 func TestRunSingularityCommand(t *testing.T) {
 	tests := []struct {
 		name     string
