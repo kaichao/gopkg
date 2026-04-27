@@ -164,3 +164,25 @@ func As(err error, target any) bool {
 func Unwrap(err error) error {
 	return errors.Unwrap(err)
 }
+
+// Cause returns the root underlying cause of an error by walking the entire
+// Unwrap chain until it reaches the innermost error (i.e., the error that
+// has no Unwrap method or returns nil from Unwrap).
+//
+// This is useful for extracting the original error from a chain of wrapped
+// errors, similar to the Cause pattern from github.com/pkg/errors.
+//
+// If err is nil, returns nil.
+// If err has no cause, returns err itself.
+func Cause(err error) error {
+	if err == nil {
+		return nil
+	}
+	for {
+		cause := errors.Unwrap(err)
+		if cause == nil {
+			return err
+		}
+		err = cause
+	}
+}

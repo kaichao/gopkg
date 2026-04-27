@@ -4,11 +4,14 @@ Enhanced error handling for Go with tracing, context, and error codes.
 
 ## Features
 
-- Error tracing with stack information
+- Error tracing with file:line:function location information
 - Context key-value pairs for structured error data
 - Integer error codes for programmatic handling
-- Error chain support (compatible with standard errors package)
-- Flexible error creation with E() function
+- Error chain support (compatible with standard errors.Is/As)
+- Flexible error creation with E() and WrapE() shorthand
+- `fmt.Formatter` support: `%v` for message, `%+v` for full details
+- Root cause extraction with `Cause()`
+- Stack trace capture when creating/wrapping errors
 
 ## Quick Start
 
@@ -82,11 +85,30 @@ errors.WrapE(err, "message", "key", value)
 errors.WrapE(err, code, "message")
 ```
 
+### Cause
+Extract the root cause from an error chain.
+```go
+errors.Cause(err)
+```
+
+### GetCode
+Retrieve the error code from a TracedError, returning -1 if not found.
+```go
+code := errors.GetCode(err)
+```
+
 ### Is/As
 Compatible with standard errors package.
 ```go
 errors.Is(err, target)
 errors.As(err, &target)
+```
+
+### Formatting
+TracedError implements fmt.Formatter for verbose output:
+```go
+fmt.Printf("%v", err)   // Error message only
+fmt.Printf("%+v", err)  // Full details with location, timestamp, context, and cause chain
 ```
 
 ## Examples

@@ -68,8 +68,25 @@ func main() {
 		WithContext("path", "/api/users")
 	fmt.Println(detailedErr.Detailed())
 
-	// 6. Full chain retrieval
-	fmt.Println("\n6. Full Chain Retrieval:")
+	// 6. %+v formatting
+	fmt.Println("\n6. %%+v Formatting:")
+	fmt.Printf("  %%v:  %v\n", detailedErr)
+	fmt.Printf("  %%+v:\n%+v\n", detailedErr)
+
+	// 7. Cause extraction
+	fmt.Println("\n7. Root Cause Extraction:")
+	causeChain := pkgerrors.Wrap(
+		pkgerrors.Wrap(
+			pkgerrors.New("root cause", 1000),
+			"mid-level",
+		),
+		"top-level",
+	)
+	fmt.Printf("  Full error: %v\n", causeChain)
+	fmt.Printf("  Root cause: %v\n", pkgerrors.Cause(causeChain))
+
+	// 8. Full chain retrieval
+	fmt.Println("\n8. Full Chain Retrieval:")
 	chain := pkgerrors.New("root", 1)
 	chain = pkgerrors.Wrap(chain, "level2")
 	chain = pkgerrors.Wrap(chain, "level3")

@@ -84,7 +84,11 @@ func Wrap(err error, msg string, skip ...int) *TracedError {
 	return tracedErr
 }
 
-// WithContext adds context information to the error
+// WithContext adds context information to the error.
+// Note: This mutates the error in place and is intended for use during
+// error construction (typically chained right after New/Wrap).
+// For concurrent use, create errors in a single goroutine and pass
+// them immutably to other goroutines.
 func (e *TracedError) WithContext(key string, value any) *TracedError {
 	if e.Context == nil {
 		e.Context = make(map[string]any)
@@ -101,6 +105,32 @@ func (e *TracedError) Error() string {
 	return e.Message
 }
 
+// Format implements fmt.Formatter for different output formats.
+// Supported verbs:
+//
+//	%v  - error message only (same as Error())
+//	%+v - full details including location, timestamp, context, and cause chain
+//	%s  - error message only
+//	%q  - quoted error message
+func (e *TracedError) Format(f fmt.State, verb rune) {
+	switch verb {
+	case 'v':
+		if f.Flag('+') {
+			// %+v: output full details
+			fmt.Fprint(f, e.Detailed())
+		} else {
+			// %v: output message only
+			fmt.Fprint(f, e.Message)
+		}
+	case 's':
+		fmt.Fprint(f, e.Message)
+	case 'q':
+		fmt.Fprintf(f, "%q", e.Message)
+	default:
+		fmt.Fprint(f, e.Message)
+	}
+}
+
 // Detailed returns a formatted error chain with full details.
 // This is useful for debugging and logging purposes.
 func (e *TracedError) Detailed() string {
@@ -109,6 +139,10 @@ func (e *TracedError) Detailed() string {
 	sb.WriteString(fmt.Sprintf("Error: %s\n", e.Message))
 	sb.WriteString(fmt.Sprintf("Location: %s\n", e.Location))
 	sb.WriteString(fmt.Sprintf("Time: %s\n", e.Timestamp.Format("2006-01-02 15:04:05")))
+
+	if e.Code != -1 {
+		sb.WriteString(fmt.Sprintf("Code: %d\n", e.Code))
+	}
 
 	if len(e.Context) > 0 {
 		sb.WriteString("Context:\n")
