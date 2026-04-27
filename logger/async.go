@@ -71,15 +71,9 @@ func (w *AsyncWriter) Write(p []byte) (n int, err error) {
 		return len(p), nil
 	}
 
-	// create a temporary entry to format output
-	entry := &logrus.Entry{
-		Logger: &logrus.Logger{
-			Formatter: w.underlying,
-		},
-		Message: string(p),
-		Level:   logrus.InfoLevel,
-	}
-	w.syncWrite(entry)
+	// create a temporary entry to route through WriteEntry
+	entry := newLogEntry(w.underlying, string(p))
+	w.WriteEntry(entry)
 	return len(p), nil
 }
 
@@ -208,6 +202,17 @@ func (w *AsyncWriter) Cap() int {
 	return cap(w.ch)
 }
 
+// newLogEntry creates a logrus.Entry with the given formatter and message
+func newLogEntry(formatter logrus.Formatter, msg string) *logrus.Entry {
+	return &logrus.Entry{
+		Logger: &logrus.Logger{
+			Formatter: formatter,
+		},
+		Message: msg,
+		Level:   logrus.InfoLevel,
+	}
+}
+
 // Close closes async writer
 func (w *AsyncWriter) Close() error {
 	w.Stop()
@@ -216,13 +221,7 @@ func (w *AsyncWriter) Close() error {
 
 // WriteString implements io.StringWriter interface
 func (w *AsyncWriter) WriteString(s string) (int, error) {
-	entry := &logrus.Entry{
-		Logger: &logrus.Logger{
-			Formatter: w.underlying,
-		},
-		Message: s,
-		Level:   logrus.InfoLevel,
-	}
+	entry := newLogEntry(w.underlying, s)
 	w.WriteEntry(entry)
 	return len(s), nil
 }
@@ -246,14 +245,7 @@ func (a *AsyncWriterAdapter) Write(p []byte) (n int, err error) {
 		return len(p), nil
 	}
 
-	// create a temporary entry to format output
-	entry := &logrus.Entry{
-		Logger: &logrus.Logger{
-			Formatter: a.AsyncWriter.underlying,
-		},
-		Message: string(p),
-		Level:   logrus.InfoLevel,
-	}
+	entry := newLogEntry(a.AsyncWriter.underlying, string(p))
 	a.AsyncWriter.WriteEntry(entry)
 	return len(p), nil
 }

@@ -42,34 +42,8 @@ type Config struct {
 func LoadConfig() *Config {
 	cfg := &Config{}
 
-	// Use reflection to populate config from environment
+	// Use reflection to populate config from environment (uses struct tags for defaults)
 	loadFromEnv(cfg)
-
-	// Apply default values
-	if cfg.Level == "" {
-		cfg.Level = "info"
-	}
-	if cfg.Format == "" {
-		cfg.Format = "json"
-	}
-	if cfg.Output == "" {
-		cfg.Output = "stdout"
-	}
-	if cfg.FilePath == "" {
-		cfg.FilePath = "app.log"
-	}
-	if cfg.MaxSize <= 0 {
-		cfg.MaxSize = 100
-	}
-	if cfg.MaxAge <= 0 {
-		cfg.MaxAge = 7
-	}
-	if cfg.MaxBackups <= 0 {
-		cfg.MaxBackups = 5
-	}
-	if cfg.BufferSize <= 0 {
-		cfg.BufferSize = 1000
-	}
 
 	return cfg
 }
@@ -94,33 +68,26 @@ func loadFromEnv(cfg *Config) {
 
 		// Try to get value from environment
 		if envValue, exists := os.LookupEnv(envTag); exists {
-			// Parse value based on field type
-			switch field.Type().String() {
-			case "string":
-				field.SetString(envValue)
-			case "int":
-				if intValue, err := strconv.Atoi(envValue); err == nil {
-					field.SetInt(int64(intValue))
-				}
-			case "bool":
-				if boolValue, err := strconv.ParseBool(envValue); err == nil {
-					field.SetBool(boolValue)
-				}
-			}
+			setFieldFromString(field, envValue)
 		} else if defaultTag != "" {
 			// Use default value
-			switch field.Type().String() {
-			case "string":
-				field.SetString(defaultTag)
-			case "int":
-				if intValue, err := strconv.Atoi(defaultTag); err == nil {
-					field.SetInt(int64(intValue))
-				}
-			case "bool":
-				if boolValue, err := strconv.ParseBool(defaultTag); err == nil {
-					field.SetBool(boolValue)
-				}
-			}
+			setFieldFromString(field, defaultTag)
+		}
+	}
+}
+
+// setFieldFromString sets a reflect.Value field by parsing a string value based on the field type
+func setFieldFromString(field reflect.Value, raw string) {
+	switch field.Type().String() {
+	case "string":
+		field.SetString(raw)
+	case "int":
+		if intValue, err := strconv.Atoi(raw); err == nil {
+			field.SetInt(int64(intValue))
+		}
+	case "bool":
+		if boolValue, err := strconv.ParseBool(raw); err == nil {
+			field.SetBool(boolValue)
 		}
 	}
 }

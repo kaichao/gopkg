@@ -278,9 +278,22 @@ func Global() *Logger {
 				Format: "json",
 				Output: "stdout",
 			}
-			if logger, err := NewLogger(cfg); err == nil {
-				defaultLogger = logger
+			logger, err := NewLogger(cfg)
+			if err != nil {
+				// Fallback to bare logrus logger
+				fallback := logrus.New()
+				fallback.SetOutput(os.Stderr)
+				fallback.SetFormatter(&logrus.JSONFormatter{})
+				fallback.Warn("failed to create default logger, using fallback")
+				defaultLogger = &Logger{
+					Logger: fallback,
+					config: cfg,
+					entry:  logrus.NewEntry(fallback),
+					fields: make(logrus.Fields),
+				}
+				return
 			}
+			defaultLogger = logger
 		}
 	})
 	return defaultLogger

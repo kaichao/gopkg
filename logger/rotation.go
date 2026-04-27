@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -182,34 +183,29 @@ func cleanupOldLogs(dir, prefix string, maxAge, maxBackups int) {
 		return
 	}
 
-	var logFiles []struct {
+	type logFileInfo struct {
 		name    string
 		modTime time.Time
 	}
 
+	var logFiles []logFileInfo
+
 	for _, file := range files {
 		if !file.IsDir() && file.Name() != prefix && strings.HasPrefix(file.Name(), prefix) {
 			if info, err := file.Info(); err == nil {
-				logFiles = append(logFiles, struct {
-					name    string
-					modTime time.Time
-				}{file.Name(), info.ModTime()})
+				logFiles = append(logFiles, logFileInfo{file.Name(), info.ModTime()})
 			}
 		}
 	}
 
 	// sort by time (newest first)
-	for i := 0; i < len(logFiles); i++ {
-		for j := i + 1; j < len(logFiles); j++ {
-			if logFiles[i].modTime.Before(logFiles[j].modTime) {
-				logFiles[i], logFiles[j] = logFiles[j], logFiles[i]
-			}
-		}
-	}
+	sort.Slice(logFiles, func(i, j int) bool {
+		return logFiles[i].modTime.After(logFiles[j].modTime)
+	})
 
-	// delete old files exceeding count limit
+	// delete old files exceeding count limit (keep newest maxBackups files)
 	if len(logFiles) > maxBackups {
-		for i := 0; i < len(logFiles)-maxBackups; i++ {
+		for i := maxBackups; i < len(logFiles); i++ {
 			filePath := filepath.Join(dir, logFiles[i].name)
 			os.Remove(filePath)
 		}
