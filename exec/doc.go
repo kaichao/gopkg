@@ -38,7 +38,7 @@
 //	RunReturnAll(command string, timeout int) (code int, stdout string, stderr string, err error)
 //	RunReturnExitCode(command string, timeout int) (code int, error)
 //	RunReturnStdout(command string, timeout int) (string, error)
-//	RunWithRetries(cmd string, numRetries int, timeout int) int
+//	RunWithRetries(cmd string, numRetries int, timeout int) (int, error)
 //	RunSSHCommand(config SSHConfig, command string, timeout int) (code int, stdout string, stderr string, err error)
 //
 // Exit Code Convention:
@@ -56,13 +56,13 @@
 //		Port       int    // Optional: SSH port (default: 22)
 //		KeyPath    string // Optional: Path to SSH private key (preferred over password)
 //		Password   string // Optional: SSH password
-//		Timeout    int    // Optional: Connection timeout in seconds
 //		Background bool   // Optional: Run command in background mode
+//		UseHomeTmp bool   // Optional: Use ${HOME}/tmp instead of /tmp
 //	}
 //
 // Output Handling:
 // - Standard output and error are captured using circular buffers (10MB limit)
-// - Output is also streamed to os.Stdout and os.Stderr in real-time
+// - Output is not automatically printed to os.Stdout/os.Stderr; it is returned to the caller
 // - Background SSH commands return PID instead of output
 //
 // Error Handling:
@@ -77,5 +77,5 @@
 //
 // Dependencies:
 // - golang.org/x/crypto/ssh for SSH functionality
-// - github.com/sirupsen/logrus for structured logging
+// - github.com/sirupsen/logrus for structured logging (logging only, no global init side effects)
 package exec

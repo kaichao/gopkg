@@ -71,28 +71,29 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 	stdoutBuf := NewCircularBuffer(maxOutputSize)
 	stderrBuf := NewCircularBuffer(maxOutputSize)
 
-	// Write output to both os.Stdout/os.Stderr and circular buffers
-	stdoutWriter := io.MultiWriter(os.Stdout, stdoutBuf)
-	stderrWriter := io.MultiWriter(os.Stderr, stderrBuf)
-
 	// Capture output asynchronously
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
-		_, err := io.Copy(stdoutWriter, stdoutPipe)
+		_, err := io.Copy(stdoutBuf, stdoutPipe)
 		if err != nil && !errors.Is(err, os.ErrClosed) {
 			logrus.Errorf("copy stdout failed: %v", err)
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		_, err := io.Copy(stderrWriter, stderrPipe)
+		_, err := io.Copy(stderrBuf, stderrPipe)
 		if err != nil && !errors.Is(err, os.ErrClosed) {
 			logrus.Errorf("copy stderr failed: %v", err)
 		}
 	}()
+
+	// Start command
+	if err := cmd.Start(); err != nil {
+		return 125, "", "", errors.WrapE(err, "start command failed")
+	}
 
 	// Terminate process group after timeout
 	if timeout > 0 {
@@ -102,11 +103,6 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 				syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			}
 		}()
-	}
-
-	// Start command
-	if err := cmd.Start(); err != nil {
-		return 125, "", "", errors.WrapE(err, "start command failed")
 	}
 
 	// Wait for command to finish
@@ -168,25 +164,32 @@ func RunReturnStdout(command string, timeout int) (string, error) {
 	return strings.TrimSpace(stdout), err
 }
 
-// RunWithRetries ...
-func RunWithRetries(cmd string, numRetries int, timeout int) int {
+// RunWithRetries executes a command up to numRetries times until success.
+// Returns 0 on success, or the last exit code if all retries are exhausted.
+// An error is returned if RunReturnExitCode encounters a non-exit-code error (e.g., timeout).
+func RunWithRetries(cmd string, numRetries int, timeout int) (int, error) {
 	delay := 10 * time.Second
-	var code int
+	var lastCode int
 	for i := 0; i < numRetries; i++ {
-		code, _ = RunReturnExitCode(cmd, timeout)
-		if code == 0 {
-			return code
+		code, err := RunReturnExitCode(cmd, timeout)
+		if err != nil {
+			return code, err
 		}
+		if code == 0 {
+			return code, nil
+		}
+		lastCode = code
 		fmt.Printf("num-of-retries:%d,cmd=%s\n", i+1, cmd)
 		time.Sleep(delay)
 		delay *= 2
 		timeout *= 2
 	}
-	return code
+	return lastCode, nil
 }
 
-// CircularBuffer implements a fixed-size circular buffer
+// CircularBuffer implements a fixed-size circular buffer, safe for concurrent use.
 type CircularBuffer struct {
+	mu     sync.RWMutex
 	buf    []byte
 	size   int
 	offset int
@@ -203,6 +206,8 @@ func NewCircularBuffer(size int) *CircularBuffer {
 
 // Write writes data to the circular buffer, overwriting oldest data when exceeding capacity
 func (c *CircularBuffer) Write(p []byte) (n int, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	n = len(p)
 	for len(p) > 0 {
 		chunk := len(p)
@@ -222,6 +227,8 @@ func (c *CircularBuffer) Write(p []byte) (n int, err error) {
 
 // Bytes returns the latest data from the buffer
 func (c *CircularBuffer) Bytes() []byte {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if !c.full {
 		return c.buf[:c.offset]
 	}

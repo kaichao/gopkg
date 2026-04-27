@@ -90,29 +90,6 @@ type SSHConfig struct {
    - Record metadata for critical operations (user, command, timestamp)
    - Avoid logging sensitive output
 
-## License
-
-MIT License
-
-## Security Considerations
-
-1. **Authentication Security**
-   - Set SSH private key permissions to 600
-   - Avoid hardcoding passwords in code
-
-2. **Command Injection Protection**
-   ```go
-   // Unsafe
-   cmd := fmt.Sprintf("ls %s", userInput)
-   
-   // Safe approach
-   cmd := fmt.Sprintf("ls %s", filepath.Clean(userInput))
-   ```
-
-3. **Logging**
-   - Record metadata for critical operations (user, command, timestamp)
-   - Avoid logging sensitive output
-
 ## Best Practices
 
 ### Connection Reuse

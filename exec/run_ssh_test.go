@@ -13,12 +13,12 @@ var (
 	testSSHServer = "10.0.6.100"
 	testSSHPort   = 22
 	testSSHUser   = "root"
-	testSSHKey    = "" // 默认使用用户主目录下的SSH密钥
-	testPassword  = "" // 可设置为密码认证
+	testSSHKey    = "" // defaults to SSH key in user home directory
+	testPassword  = "" // can be set for password authentication
 )
 
 func init() {
-	// 尝试设置默认SSH密钥路径用于测试
+	// Attempt to set default SSH key path for testing
 	if path, err := defaultSSHKeyPath(); err == nil {
 		testSSHKey = path
 	}
@@ -59,7 +59,7 @@ func TestRunSingularityCommand(t *testing.T) {
 		Password: testPassword,
 	}
 
-	// 检查认证配置
+	// Check authentication configuration
 	if config.KeyPath == "" && config.Password == "" {
 		t.Fatal("SSH authentication not configured: must set either KeyPath or Password")
 	}
@@ -137,17 +137,18 @@ func TestProcessCleanup(t *testing.T) {
 		Password: testPassword,
 	}
 
-	// 检查认证配置
+	// Check authentication configuration
 	if config.KeyPath == "" && config.Password == "" {
 		t.Skip("SSH authentication not configured: must set either KeyPath or Password")
 	}
 
-	// 使用后台模式启动命令
-	config.Background = true
-	command := "sleep 30" // 使用较短的睡眠时间
+	// Start command in background mode
+	bgConfig := config
+	bgConfig.Background = true
+	command := "sleep 30" // use a shorter sleep time
 
-	// 启动后台命令，获取PID
-	code, pidOutput, _, err := RunSSHCommand(config, command, 5)
+	// Start background command and get PID
+	code, pidOutput, _, err := RunSSHCommand(bgConfig, command, 5)
 	if err != nil {
 		t.Fatalf("Failed to start background command: %v", err)
 	}
@@ -155,7 +156,7 @@ func TestProcessCleanup(t *testing.T) {
 		t.Fatalf("Expected exit code 0, got %d", code)
 	}
 
-	// 后台命令只返回PID
+	// Background command only returns PID
 	pid := strings.TrimSpace(pidOutput)
 	if pid == "" || pid == "0" {
 		t.Fatalf("Invalid PID output: %s", pidOutput)
@@ -163,29 +164,29 @@ func TestProcessCleanup(t *testing.T) {
 
 	t.Logf("Started process with PID: %s", pid)
 
-	// 验证进程正在运行
+	// Verify the process is running (use non-background config)
 	_, psOutput, _, _ := RunSSHCommand(config, "ps -p "+pid+" -o pid= 2>/dev/null || echo 'NOT_FOUND'", 5)
 	if strings.Contains(psOutput, "NOT_FOUND") {
 		t.Fatalf("Process %s not found after startup", pid)
 	}
 
-	// 使用更可靠的清理方法
+	// Use more reliable cleanup methods
 	cleanupCmds := []string{
-		"kill -TERM " + pid, // 先发送TERM信号
+		"kill -TERM " + pid, // send TERM signal first
 		"sleep 1",
-		"kill -KILL " + pid,   // 再发送KILL信号
-		"pkill -9 -f 'sleep'", // 清理所有sleep进程
+		"kill -KILL " + pid,   // send KILL signal next
+		"pkill -9 -f 'sleep'", // clean up all sleep processes
 	}
 
 	for _, cmd := range cleanupCmds {
-		RunSSHCommand(config, cmd, 5)
+		RunSSHCommand(config, cmd, 5) // non-background: send kill signals directly
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	// 验证进程已被终止
+	// Verify the process has been terminated
 	time.Sleep(3 * time.Second)
 
-	// 使用多种方法验证进程是否已终止
+	// Use multiple methods to verify process termination
 	verifyCmds := []struct {
 		cmd          string
 		successValue string
@@ -206,19 +207,19 @@ func TestProcessCleanup(t *testing.T) {
 
 	allTerminated := true
 	for _, verify := range verifyCmds {
-		code, output, _, _ := RunSSHCommand(config, verify.cmd, 5)
+		code, output, _, _ := RunSSHCommand(config, verify.cmd, 5) // non-background: verify directly
 		output = strings.TrimSpace(output)
 
-		// 如果命令执行成功（返回码为0）且输出为空或为"0"，说明进程不存在
-		// 或者输出包含预期的终止消息，说明进程已终止
+		// If command succeeded (exit code 0) and output is empty or "0", process does not exist
+		// Or output contains expected termination message, process has terminated
 		if code == 0 && (output == "" || output == "0") {
-			// 命令执行成功且输出为空或"0"，说明进程不存在
+			// Command succeeded with empty or "0" output, process not found
 			t.Logf("Process verification passed for command '%s': output='%s' (process not found)", verify.cmd, output)
 		} else if output == verify.successValue {
-			// 命令执行失败但返回了预期的终止消息
+			// Command reported expected termination message
 			t.Logf("Process verification passed for command '%s': output='%s'", verify.cmd, output)
 		} else {
-			// 命令执行成功且有非空输出，说明进程可能仍在运行
+			// Command succeeded with non-empty output, process may still be running
 			allTerminated = false
 			t.Logf("Process verification failed for command '%s': code=%d, output='%s'", verify.cmd, code, output)
 		}
@@ -240,12 +241,12 @@ func TestCommandTimeout(t *testing.T) {
 		Password: testPassword,
 	}
 
-	// 检查认证配置
+	// Check authentication configuration
 	if config.KeyPath == "" && config.Password == "" {
 		t.Skip("SSH authentication not configured: must set either KeyPath or Password")
 	}
 
-	// Test 1: 非后台命令超时
+	// Test 1: non-background command timeout
 	t.Run("non-background command timeout", func(t *testing.T) {
 		cmd := "sleep 10"
 		start := time.Now()
@@ -263,19 +264,19 @@ func TestCommandTimeout(t *testing.T) {
 		}
 	})
 
-	// Test 2: 后台命令启动超时（后台命令只对启动过程有超时）
+	// Test 2: background command startup timeout (only startup phase has timeout)
 	t.Run("background command startup timeout", func(t *testing.T) {
 		bgConfig := config
 		bgConfig.Background = true
 
-		// 使用一个长时间运行的命令来测试启动超时
-		// 由于wrapCommand脚本本身很快，我们测试正常的后台命令
-		cmd := "sleep 60" // 长时间运行的命令
+		// Use a long-running command to test startup timeout
+		// The wrapCommand script itself is fast, so test a normal background command
+		cmd := "sleep 60" // long-running command
 		start := time.Now()
 		code, _, _, err := RunSSHCommand(bgConfig, cmd, 2)
 		duration := time.Since(start)
 
-		// 后台命令的启动过程应该成功，因为wrapCommand脚本很快
+		// Background command startup should succeed because wrapCommand is fast
 		if code != 0 {
 			t.Errorf("Expected exit code 0 for background command startup, got %d", code)
 		}
@@ -287,16 +288,16 @@ func TestCommandTimeout(t *testing.T) {
 		}
 	})
 
-	// Test 3: 后台命令正常启动（短时间命令）
+	// Test 3: background command normal startup (short command)
 	t.Run("background command normal startup", func(t *testing.T) {
 		bgConfig := config
 		bgConfig.Background = true
 
-		// 使用一个快速完成的命令
+		// Use a fast command
 		cmd := "echo 'quick command'"
 		code, pidOutput, _, err := RunSSHCommand(bgConfig, cmd, 5)
 
-		// 后台命令应该成功启动并返回PID
+		// Background command should start successfully and return PID
 		if code != 0 {
 			t.Errorf("Expected exit code 0 for background command, got %d", code)
 		}
@@ -307,19 +308,19 @@ func TestCommandTimeout(t *testing.T) {
 			t.Error("Expected PID output for background command")
 		}
 
-		// 解析PID并清理
+		// Parse PID and clean up
 		fields := strings.Fields(pidOutput)
 		if len(fields) >= 1 {
 			pid := fields[0]
 			if pid != "0" {
-				// 清理进程
+				// Clean up process
 				killCmd := "kill -9 " + pid
 				RunSSHCommand(config, killCmd, 5)
 			}
 		}
 	})
 
-	// Test 4: 标准命令超时测试
+	// Test 4: standard command timeout test
 	t.Run("standard command timeout", func(t *testing.T) {
 		config.Background = false
 		cmd := "sleep 10"
@@ -339,7 +340,7 @@ func TestCommandTimeout(t *testing.T) {
 		}
 	})
 
-	// 清理所有可能的残留进程
+	// Clean up all possible residual processes
 	cleanCmd := "pkill -9 -f 'sleep'; pkill -9 -f 'MARKER_'"
 	RunSSHCommand(config, cleanCmd, 5)
 }
@@ -363,9 +364,9 @@ func TestResourceCleanup(t *testing.T) {
 
 	go RunSSHCommand(config, testCmd, 1)
 
-	// 增强资源清理验证
+	// Enhanced resource cleanup verification
 	assert.Eventually(t, func() bool {
-		// 更彻底的清理命令组合
+		// More thorough cleanup command combination
 		cleanCmd := fmt.Sprintf(`
 			sudo rm -f %s || rm -f %s || true;
 			if [ -f %s ]; then

@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -50,17 +51,30 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 			return 125, "", "", errors.WrapE(err, "start background command failed")
 		}
 
-		// For background mode, timeout only applies to command startup
+		// Use a dedicated startup context (10s) for background commands.
+		// The user's timeout context is for the real command lifetime, not
+		// for the wrapper script that just starts it in the background.
+		startupCtx, startupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer startupCancel()
+
+		// Wait for the wrapper script to finish (it starts the real command in background,
+		// prints PID, and exits). This ensures SSH pipes are closed so captureOutput
+		// goroutines can read all data and exit.
+		waitDone := make(chan error, 1)
+		go func() {
+			waitDone <- session.Wait()
+		}()
+
 		select {
-		case <-ctx.Done():
+		case <-waitDone:
+			// Wrapper script finished normally, output should be available
+		case <-startupCtx.Done():
 			// Timeout during startup - clean up remote processes
 			_ = cleanupProcesses(client, command, marker)
 			return 124, "", "", errors.E("background command timed out during startup")
-		default:
-			// Continue to read PID marker
 		}
 
-		// Wait for background command to write PID marker
+		// Wait for output goroutines to finish reading all data
 		wg.Wait()
 		if stdoutBuf.Len() == 0 {
 			_ = cleanupProcesses(client, command, marker)
@@ -72,14 +86,22 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 			_ = cleanupProcesses(client, command, marker)
 			return 125, "", "", errors.E("empty background command output")
 		}
-		pidLine = lines[0]
-		fields := strings.Fields(pidLine)
-		if len(fields) != 2 || !strings.HasPrefix(fields[1], "MARKER_") {
-			_ = cleanupProcesses(client, command, marker)
-			return 125, "", "", errors.E("invalid PID marker format, got: %q", pidLine)
+
+		// Find the line with "PID MARKER_xxx" format (the second line from wrapCommand)
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) == 2 && strings.HasPrefix(fields[1], "MARKER_") {
+				// Return the actual PID as stdout, zero exit code
+				return 0, fields[0], "", nil
+			}
 		}
-		// Return PID as stdout, zero exit code
-		return 0, fields[1], "", nil
+
+		_ = cleanupProcesses(client, command, marker)
+		return 125, "", "", fmt.Errorf("invalid PID marker format, got: %q", pidLine)
 	}
 
 	// Normal synchronous command execution
@@ -109,11 +131,21 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 	case <-ctx.Done():
 		// Timeout or cancellation
 		if ctx.Err() == context.DeadlineExceeded {
-			// Send SIGKILL to remote process and ensure cleanup
+			// Send SIGKILL to remote process
 			_ = session.Signal(ssh.SIGKILL)
+			// Wait briefly for the remote process to die and pipes to drain,
+			// so we can capture any buffered output before closing the session.
+			select {
+			case <-done:
+				// Command exited due to signal
+			case <-time.After(500 * time.Millisecond):
+				// Grace period for pipe draining
+			}
+			wg.Wait() // Wait for output goroutines to finish reading
+			stdout := stdoutBuf.String()
+			stderr := stderrBuf.String()
 			_ = session.Close()
-			wg.Wait() // Wait for output buffers to be fully read
-			return 124, "", "", errors.E("command timed out")
+			return 124, stdout, stderr, errors.E("command timed out")
 		}
 		return 125, "", "", ctx.Err()
 	}
@@ -162,68 +194,38 @@ func createSSHClient(config SSHConfig, timeout int) (*ssh.Client, context.Contex
 	return client, ctx, cancel, nil
 }
 
-// wrapCommand wraps command with PID marker for background execution
+// wrapCommand wraps command with PID marker for background execution.
+// Uses `nohup` directly in the SSH command line (no temp script, no
+// heredoc, no quoting issues). The command backgrounds the real command
+// with nohup, then immediately echoes its PID and exit code.
+// session.Wait() returns immediately after the echo.
 func wrapCommand(command string, useHomeTmp bool) (string, string) {
 	marker := fmt.Sprintf("MARKER_%d", time.Now().UnixNano())
-	tmpDir := "/tmp"
-	if useHomeTmp {
-		if home, err := os.UserHomeDir(); err == nil {
-			tmpDir = filepath.Join(home, "tmp")
-		}
-	}
-	// Create wrapper script that:
-	// 1. Uses temp directory based on useHomeTmp
-	// 2. Creates a temporary script file
-	// 3. Executes command in background with proper process management
-	// 4. Returns actual PID and marker for validation
-	wrapper := fmt.Sprintf(`
-		tmp_dir="%s"
-		if %t; then
-			mkdir -p ${HOME}/tmp
-			tmp_dir="${HOME}/tmp"
-		fi
-		tmp_script=$(mktemp -p "$tmp_dir")
-		chmod +x "$tmp_script"
-		
-		cat > "$tmp_script" <<'EOF'
-#!/bin/bash
-# MARKER - used by tests to locate the process
-(%s) &
-real_pid=$!
-echo "$real_pid" "$marker"
-echo "$real_pid $marker" > "$tmp_dir/real_pid"
-wait $real_pid
-EOF
-
-		nohup "$tmp_script" >/dev/null 2>&1 &
-		wrapper_pid=$!
-		disown $wrapper_pid
-		sleep 0.5
-
-		if [ -f "$tmp_dir/real_pid" ]; then
-			real_pid=$(cat "$tmp_dir/real_pid")
-		else
-			real_pid=$wrapper_pid
-		fi
-
-		sleep 0.5
-		if ps -p "$real_pid" >/dev/null 2>&1 || [ -d "/proc/$real_pid" ]; then
-			echo "$real_pid"
-			echo "$real_pid %s"
-		else
-			echo "0"
-			echo "0 %s"
-		fi
-
-		rm -f "$tmp_script" "$tmp_dir/real_pid" 2>/dev/null || true
-	`, tmpDir, useHomeTmp, command, marker, marker)
+	// Execute: nohup COMMAND >/dev/null 2>&1 & echo "$! MARKER"
+	// nohup makes the process survive SSH session closure.
+	// $! captures its PID.
+	// "echo $!" outputs the PID before command finishes.
+	// session.Wait() returns immediately.
+	wrapper := fmt.Sprintf(
+		"nohup %[2]s >/dev/null 2>&1 & echo \"$! %[1]s\"",
+		marker, command)
 	return wrapper, marker
 }
 
-// captureOutput captures stdout and stderr from SSH session with DEBUG line filtering
+// captureOutput captures stdout and stderr from SSH session with DEBUG line filtering.
+// Reading is done via bufio.Scanner which handles line boundaries and properly
+// terminates when the pipe is closed (on session end/cancel).
 func captureOutput(ctx context.Context, session *ssh.Session) (*bytes.Buffer, *bytes.Buffer, *sync.WaitGroup) {
-	stdoutPipe, _ := session.StdoutPipe()
-	stderrPipe, _ := session.StderrPipe()
+	stdoutPipe, err := session.StdoutPipe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "capture stdout pipe failed: %v\n", err)
+		stdoutPipe = nil
+	}
+	stderrPipe, err := session.StderrPipe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "capture stderr pipe failed: %v\n", err)
+		stderrPipe = nil
+	}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	var wg sync.WaitGroup
@@ -231,28 +233,27 @@ func captureOutput(ctx context.Context, session *ssh.Session) (*bytes.Buffer, *b
 
 	copyData := func(dest *bytes.Buffer, src io.Reader) {
 		defer wg.Done()
-		buf := make([]byte, 32*1024)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				n, err := src.Read(buf)
-				if n > 0 {
-					// Skip debug lines to reduce noise
-					if !bytes.Contains(buf[:n], []byte("DEBUG:")) {
-						dest.Write(buf[:n])
-					}
-				}
-				if err != nil {
-					return
-				}
+		scanner := bufio.NewScanner(src)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			// Skip debug lines to reduce noise
+			if !bytes.Contains(line, []byte("DEBUG:")) {
+				dest.Write(line)
+				dest.WriteByte('\n')
 			}
 		}
 	}
 
-	go copyData(&stdoutBuf, stdoutPipe)
-	go copyData(&stderrBuf, stderrPipe)
+	if stdoutPipe != nil {
+		go copyData(&stdoutBuf, stdoutPipe)
+	} else {
+		wg.Done()
+	}
+	if stderrPipe != nil {
+		go copyData(&stderrBuf, stderrPipe)
+	} else {
+		wg.Done()
+	}
 
 	return &stdoutBuf, &stderrBuf, &wg
 }
@@ -277,7 +278,7 @@ func defaultSSHKeyPath() (string, error) {
 		}
 	}
 
-	return "", errors.E("no default SSH key found in %s/.ssh/ (tried: id_ed25519, id_rsa, id_ecdsa)", homeDir)
+	return "", fmt.Errorf("no default SSH key found in %s/.ssh/ (tried: id_ed25519, id_rsa, id_ecdsa)", homeDir)
 }
 
 // getAuthMethod returns the appropriate SSH authentication method based on config
@@ -326,20 +327,22 @@ func sshDialWithRetry(ctx context.Context, config SSHConfig, clientConfig *ssh.C
 	return nil, err
 }
 
-// cleanupProcesses cleans up remote processes and temporary files associated with a command
+// cleanupProcesses cleans up remote processes and temporary files
+// associated with a specific command and marker on the remote host.
+// Uses marker-specific pkill to avoid killing unrelated processes.
 func cleanupProcesses(client *ssh.Client, command string, marker string) error {
 	if client == nil {
 		return nil
 	}
 
+	// Only kill processes matching the marker or the wrapper script
 	cleanupCmds := []string{
-		fmt.Sprintf("pkill -9 -f '%s' 2>/dev/null || true", command),
 		fmt.Sprintf("pkill -9 -f '%s' 2>/dev/null || true", marker),
-		"pkill -9 -f 'sleep' 2>/dev/null || true",
-		"pkill -9 -f 'singularity' 2>/dev/null || true",
-		// Clean up temporary files
-		fmt.Sprintf("rm -rf /tmp/ssh_wrapper_* 2>/dev/null || true"),
-		fmt.Sprintf("rm -rf ${HOME}/tmp/ssh_wrapper_* 2>/dev/null || true"),
+		fmt.Sprintf("rm -f /tmp/real_pid ${HOME}/tmp/real_pid 2>/dev/null || true"),
+	}
+
+	if command != "" {
+		cleanupCmds = append([]string{fmt.Sprintf("pkill -9 -f '%s' 2>/dev/null || true", command)}, cleanupCmds...)
 	}
 
 	for _, cmd := range cleanupCmds {

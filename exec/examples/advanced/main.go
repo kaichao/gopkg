@@ -63,8 +63,12 @@ func main() {
 
 	// Example 6: Command with retries
 	fmt.Println("\n=== Example 6: Command with retries ===")
-	retryCode := exec.RunWithRetries("curl -sSf http://localhost:8080/ready", 3, 5)
-	fmt.Printf("Command with retries final exit code: %d\n", retryCode)
+	retryCode, retryErr := exec.RunWithRetries("curl -sSf http://localhost:8080/ready", 3, 5)
+	if retryErr != nil {
+		fmt.Printf("Command with retries error: %v (exit code: %d)\n", retryErr, retryCode)
+	} else {
+		fmt.Printf("Command with retries final exit code: %d\n", retryCode)
+	}
 
 	// Example 7: Timeout handling
 	fmt.Println("\n=== Example 7: Timeout handling ===")
