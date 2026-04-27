@@ -5,21 +5,18 @@ import (
 	"fmt"
 )
 
-// E is a shorthand for creating errors with context
-// Usage:
-//
-//	errors.E("message")  // Simple error
-//	errors.E("message", "key1", value1, "key2", value2)  // With context
-//	errors.E(404, "message")  // With error code (int)
-//	errors.E(404, "message", "key1", value1)  // With code and context
-func E(args ...any) error {
-	if len(args) == 0 {
-		return nil
-	}
+// parseEArgs extracts message, code, and key-value start index from variadic arguments.
+// This is shared by E() and WrapE() to avoid duplicate parsing logic.
+// Returns:
+//   - msg: the extracted error message
+//   - code: the extracted error code (-1 if not specified)
+//   - startIdx: the index where key-value pairs begin in args
+func parseEArgs(args []any) (msg string, code int, startIdx int) {
+	code = -1 // Default code
 
-	var msg string
-	var code int = -1 // Default code
-	var startIdx int
+	if len(args) == 0 {
+		return "", -1, 0
+	}
 
 	// Check if first arg is an int (error code)
 	if c, ok := args[0].(int); ok {
@@ -49,10 +46,11 @@ func E(args ...any) error {
 		startIdx = 1
 	}
 
-	// Create error with code, skip 1 for E function
-	err := New(msg, code, 1)
+	return msg, code, startIdx
+}
 
-	// Process key-value pairs
+// applyContext sets key-value pairs from args starting at startIdx on the error.
+func applyContext(err *TracedError, args []any, startIdx int) {
 	for i := startIdx; i < len(args); i += 2 {
 		if i+1 >= len(args) {
 			break
@@ -65,6 +63,27 @@ func E(args ...any) error {
 
 		err.WithContext(key, args[i+1])
 	}
+}
+
+// E is a shorthand for creating errors with context
+// Usage:
+//
+//	errors.E("message")  // Simple error
+//	errors.E("message", "key1", value1, "key2", value2)  // With context
+//	errors.E(404, "message")  // With error code (int)
+//	errors.E(404, "message", "key1", value1)  // With code and context
+func E(args ...any) error {
+	if len(args) == 0 {
+		return nil
+	}
+
+	msg, code, startIdx := parseEArgs(args)
+
+	// Create error with code, skip 1 for E function
+	err := New(msg, code, 1)
+
+	// Process key-value pairs
+	applyContext(err, args, startIdx)
 
 	return err
 }
@@ -85,37 +104,7 @@ func WrapE(err error, args ...any) error {
 		return Wrap(err, "")
 	}
 
-	var msg string
-	var code int = -1 // Default code
-	var startIdx int
-
-	// Check if first arg is an int (error code)
-	if c, ok := args[0].(int); ok {
-		code = c
-		// Second arg should be message
-		if len(args) >= 2 {
-			if m, ok := args[1].(string); ok {
-				msg = m
-				startIdx = 2
-			} else {
-				// If second arg is not string, treat first arg as message
-				msg = fmt.Sprintf("%s", args[0])
-				code = -1
-				startIdx = 1
-			}
-		} else {
-			// Only code provided, no message
-			msg = fmt.Sprintf("Error code: %d", code)
-			startIdx = 1
-		}
-	} else {
-		// First arg is message (string or any)
-		msg, _ = args[0].(string)
-		if msg == "" {
-			msg = fmt.Sprintf("%s", args[0])
-		}
-		startIdx = 1
-	}
+	msg, code, startIdx := parseEArgs(args)
 
 	// Create wrapped error, skip 1 for WrapE function
 	wrapped := Wrap(err, msg, 1)
@@ -124,18 +113,7 @@ func WrapE(err error, args ...any) error {
 	}
 
 	// Process key-value pairs
-	for i := startIdx; i < len(args); i += 2 {
-		if i+1 >= len(args) {
-			break
-		}
-
-		key, ok := args[i].(string)
-		if !ok {
-			continue
-		}
-
-		wrapped.WithContext(key, args[i+1])
-	}
+	applyContext(wrapped, args, startIdx)
 
 	return wrapped
 }

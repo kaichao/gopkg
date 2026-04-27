@@ -66,7 +66,7 @@ func main() {
 		WithContext("request_id", "abc-123").
 		WithContext("user_id", 456).
 		WithContext("path", "/api/users")
-	fmt.Println(detailedErr.Format())
+	fmt.Println(detailedErr.Detailed())
 
 	// 6. Full chain retrieval
 	fmt.Println("\n6. Full Chain Retrieval:")

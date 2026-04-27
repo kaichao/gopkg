@@ -1,6 +1,7 @@
 package errors_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/kaichao/gopkg/errors"
@@ -84,24 +85,24 @@ func TestErrorInterface(t *testing.T) {
 	}
 }
 
-func TestFormat(t *testing.T) {
+func TestDetailed(t *testing.T) {
 	err := errors.New("test error").
 		WithContext("key", "value")
 
-	formatted := err.Format()
+	formatted := err.Detailed()
 	if formatted == "" {
-		t.Error("Format should return non-empty string")
+		t.Error("Detailed should return non-empty string")
 	}
 
 	// Check that key parts are present
 	if !contains(formatted, "Error: test error") {
-		t.Error("Format should contain error message")
+		t.Error("Detailed should contain error message")
 	}
 	if !contains(formatted, "Location:") {
-		t.Error("Format should contain location")
+		t.Error("Detailed should contain location")
 	}
 	if !contains(formatted, "Context:") {
-		t.Error("Format should contain context")
+		t.Error("Detailed should contain context")
 	}
 }
 
@@ -126,6 +127,35 @@ func TestGetFullChain(t *testing.T) {
 	}
 }
 
+func TestGetFullChainWithStdError(t *testing.T) {
+	stdErr := fmt.Errorf("standard error")
+	wrapped := errors.Wrap(stdErr, "wrapped")
+	doubleWrapped := errors.Wrap(wrapped, "double wrapped")
+
+	chain := doubleWrapped.GetFullChain()
+	if len(chain) != 3 {
+		t.Errorf("Expected chain length 3, got %d", len(chain))
+	}
+
+	if chain[0].Message != "double wrapped: wrapped: standard error" {
+		t.Errorf("Unexpected chain[0] message: %q", chain[0].Message)
+	}
+	if chain[1].Message != "wrapped: standard error" {
+		t.Errorf("Unexpected chain[1] message: %q", chain[1].Message)
+	}
+	if chain[2].Message != "standard error" {
+		t.Errorf("Unexpected chain[2] message: %q", chain[2].Message)
+	}
+}
+
+func TestGetFullChainWithNilCause(t *testing.T) {
+	err := errors.New("root error")
+	chain := err.GetFullChain()
+	if len(chain) != 1 {
+		t.Errorf("Expected chain length 1, got %d", len(chain))
+	}
+}
+
 func TestUnwrap(t *testing.T) {
 	original := errors.New("original")
 	wrapped := errors.Wrap(original, "wrapped")
@@ -146,30 +176,37 @@ func TestIs(t *testing.T) {
 	err2 := errors.New("test error")
 	err3 := errors.New("different error")
 
-	if !err1.Is(err2) {
-		t.Error("Is should return true for errors with same message")
+	// Instance equality should work
+	if !err1.Is(err1) {
+		t.Error("Is should return true for same instance")
 	}
 
+	// Different instances with same content should NOT match (pointer equality only)
+	if err1.Is(err2) {
+		t.Error("Is should return false for different instances (pointer equality only)")
+	}
+
+	// Different instances with different content should NOT match
 	if err1.Is(err3) {
-		t.Error("Is should return false for errors with different messages")
+		t.Error("Is should return false for different instances")
 	}
 
-	// Test with error codes
+	// Errors with same code but different instances should NOT match
 	errCode1 := errors.New("error", 1001)
 	errCode2 := errors.New("error", 1001)
 	errCode3 := errors.New("error", 1002)
 
-	if !errCode1.Is(errCode2) {
-		t.Error("Is should return true for errors with same code")
+	if errCode1.Is(errCode2) {
+		t.Error("Is should return false for different instances with same code")
 	}
 
 	if errCode1.Is(errCode3) {
-		t.Error("Is should return false for errors with different codes")
+		t.Error("Is should return false for different instances with different codes")
 	}
 
-	// Test instance equality
-	if !err1.Is(err1) {
-		t.Error("Is should return true for same instance")
+	// Nil target should not match
+	if err1.Is(nil) {
+		t.Error("Is should return false for nil target")
 	}
 }
 

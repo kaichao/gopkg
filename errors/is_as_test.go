@@ -87,17 +87,17 @@ func TestIsInstanceEquality(t *testing.T) {
 		t.Error("Is should return true for same instance")
 	}
 
-	// Test with different instances but same content
+	// Test with different instances - should NOT match (pointer equality only)
 	err2 := gopkgerrors.New("test error")
-	if !err.Is(err2) {
-		t.Error("Is should return true for errors with same message")
+	if err.Is(err2) {
+		t.Error("Is should return false for different instances")
 	}
 
 	// Test with different code
 	err3 := gopkgerrors.New("test error", 1001)
 	err4 := gopkgerrors.New("test error", 1002)
 	if err3.Is(err4) {
-		t.Error("Is should return false for errors with different codes")
+		t.Error("Is should return false for different instances with different codes")
 	}
 }
 
