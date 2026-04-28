@@ -110,6 +110,7 @@ func (e *TracedError) Error() string {
 //
 //	%v  - error message only (same as Error())
 //	%+v - full details including location, timestamp, context, and cause chain
+//	%#v - Go-syntax representation showing all struct fields
 //	%s  - error message only
 //	%q  - quoted error message
 func (e *TracedError) Format(f fmt.State, verb rune) {
@@ -118,6 +119,9 @@ func (e *TracedError) Format(f fmt.State, verb rune) {
 		if f.Flag('+') {
 			// %+v: output full details
 			fmt.Fprint(f, e.Detailed())
+		} else if f.Flag('#') {
+			// %#v: Go-syntax representation
+			fmt.Fprint(f, e.GoString())
 		} else {
 			// %v: output message only
 			fmt.Fprint(f, e.Message)
@@ -129,6 +133,44 @@ func (e *TracedError) Format(f fmt.State, verb rune) {
 	default:
 		fmt.Fprint(f, e.Message)
 	}
+}
+
+// GoString returns a Go-syntax representation of the TracedError.
+// This implements the fmt.GoStringer interface and is used by %#v.
+func (e *TracedError) GoString() string {
+	var sb strings.Builder
+
+	sb.WriteString("&errors.TracedError{")
+
+	fmt.Fprintf(&sb, "Message: %q", e.Message)
+
+	if e.Code != -1 {
+		fmt.Fprintf(&sb, ", Code: %d", e.Code)
+	}
+
+	if e.Location != "" {
+		fmt.Fprintf(&sb, ", Location: %q", e.Location)
+	}
+
+	if len(e.Context) > 0 {
+		sb.WriteString(", Context: map[string]any{")
+		first := true
+		for k, v := range e.Context {
+			if !first {
+				sb.WriteString(", ")
+			}
+			fmt.Fprintf(&sb, "%q: %#v", k, v)
+			first = false
+		}
+		sb.WriteString("}")
+	}
+
+	if e.cause != nil {
+		fmt.Fprintf(&sb, ", cause: %#v", e.cause)
+	}
+
+	sb.WriteString("}")
+	return sb.String()
 }
 
 // Detailed returns a formatted error chain with full details.

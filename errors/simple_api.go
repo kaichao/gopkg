@@ -5,6 +5,35 @@ import (
 	"fmt"
 )
 
+// toInt attempts to convert any integer type to int.
+// Returns the int value and true if successful, 0 and false otherwise.
+func toInt(v any) (int, bool) {
+	switch val := v.(type) {
+	case int:
+		return val, true
+	case int8:
+		return int(val), true
+	case int16:
+		return int(val), true
+	case int32:
+		return int(val), true
+	case int64:
+		return int(val), true
+	case uint:
+		return int(val), true
+	case uint8:
+		return int(val), true
+	case uint16:
+		return int(val), true
+	case uint32:
+		return int(val), true
+	case uint64:
+		return int(val), true
+	default:
+		return 0, false
+	}
+}
+
 // parseEArgs extracts message, code, and key-value start index from variadic arguments.
 // This is shared by E() and WrapE() to avoid duplicate parsing logic.
 // Returns:
@@ -18,8 +47,8 @@ func parseEArgs(args []any) (msg string, code int, startIdx int) {
 		return "", -1, 0
 	}
 
-	// Check if first arg is an int (error code)
-	if c, ok := args[0].(int); ok {
+	// Check if first arg is an integer type (error code)
+	if c, ok := toInt(args[0]); ok {
 		code = c
 		// Second arg should be message
 		if len(args) >= 2 {

@@ -30,7 +30,7 @@ func TestE(t *testing.T) {
 }
 
 func TestEWithCode(t *testing.T) {
-	// Test error with code
+	// Test error with code (int)
 	err := errors.E(404, "not found", "key1", "value1")
 	if err == nil {
 		t.Fatal("E should return non-nil error with code")
@@ -51,6 +51,98 @@ func TestEWithCode(t *testing.T) {
 
 	if len(te.Context) != 1 {
 		t.Errorf("Expected 1 context item, got %d", len(te.Context))
+	}
+}
+
+func TestEWithInt32Code(t *testing.T) {
+	// Test error with int32 code (should be auto-converted to int)
+	var code int32 = 1001
+	err := errors.E(code, "int32 error", "key1", "value1")
+	if err == nil {
+		t.Fatal("E should return non-nil error with int32 code")
+	}
+
+	te, ok := err.(*errors.TracedError)
+	if !ok {
+		t.Fatal("E should return TracedError")
+	}
+
+	if te.Code != 1001 {
+		t.Errorf("Expected code 1001, got %d", te.Code)
+	}
+
+	if te.Message != "int32 error" {
+		t.Errorf("Expected message 'int32 error', got %q", te.Message)
+	}
+
+	if len(te.Context) != 1 {
+		t.Errorf("Expected 1 context item, got %d", len(te.Context))
+	}
+}
+
+func TestEWithInt64Code(t *testing.T) {
+	// Test error with int64 code (should be auto-converted to int)
+	var code int64 = 2002
+	err := errors.E(code, "int64 error")
+	if err == nil {
+		t.Fatal("E should return non-nil error with int64 code")
+	}
+
+	te, ok := err.(*errors.TracedError)
+	if !ok {
+		t.Fatal("E should return TracedError")
+	}
+
+	if te.Code != 2002 {
+		t.Errorf("Expected code 2002, got %d", te.Code)
+	}
+
+	if te.Message != "int64 error" {
+		t.Errorf("Expected message 'int64 error', got %q", te.Message)
+	}
+}
+
+func TestEWithUintCode(t *testing.T) {
+	// Test error with uint code (should be auto-converted to int)
+	var code uint = 3003
+	err := errors.E(code, "uint error")
+	if err == nil {
+		t.Fatal("E should return non-nil error with uint code")
+	}
+
+	te, ok := err.(*errors.TracedError)
+	if !ok {
+		t.Fatal("E should return TracedError")
+	}
+
+	if te.Code != 3003 {
+		t.Errorf("Expected code 3003, got %d", te.Code)
+	}
+
+	if te.Message != "uint error" {
+		t.Errorf("Expected message 'uint error', got %q", te.Message)
+	}
+}
+
+func TestEWithInt8Code(t *testing.T) {
+	// Test error with int8 code (should be auto-converted to int)
+	var code int8 = 127
+	err := errors.E(code, "int8 error")
+	if err == nil {
+		t.Fatal("E should return non-nil error with int8 code")
+	}
+
+	te, ok := err.(*errors.TracedError)
+	if !ok {
+		t.Fatal("E should return TracedError")
+	}
+
+	if te.Code != 127 {
+		t.Errorf("Expected code 127, got %d", te.Code)
+	}
+
+	if te.Message != "int8 error" {
+		t.Errorf("Expected message 'int8 error', got %q", te.Message)
 	}
 }
 
