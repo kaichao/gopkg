@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kaichao/gopkg/errors"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -413,4 +414,121 @@ func TestResourceCleanup(t *testing.T) {
 		t.Logf("Cleanup output: %s", out)
 		return code == 0 && strings.Contains(out, "missing")
 	}, 30*time.Second, 2*time.Second, "Resource cleanup failed")
+}
+
+
+func TestSignalNameToNumber(t *testing.T) {
+	tests := []struct {
+		signal string
+		want   int
+	}{
+		{"HUP", 1},
+		{"INT", 2},
+		{"QUIT", 3},
+		{"ILL", 4},
+		{"TRAP", 5},
+		{"ABRT", 6},
+		{"BUS", 7},
+		{"FPE", 8},
+		{"KILL", 9},
+		{"USR1", 10},
+		{"SEGV", 11},
+		{"USR2", 12},
+		{"PIPE", 13},
+		{"ALRM", 14},
+		{"TERM", 15},
+		{"STKFLT", 16},
+		{"CHLD", 17},
+		{"CONT", 18},
+		{"STOP", 19},
+		{"TSTP", 20},
+		{"TTIN", 21},
+		{"TTOU", 22},
+		{"URG", 23},
+		{"XCPU", 24},
+		{"XFSZ", 25},
+		{"VTALRM", 26},
+		{"PROF", 27},
+		{"WINCH", 28},
+		{"IO", 29},
+		{"PWR", 30},
+		{"SYS", 31},
+		{"UNKNOWN", 0},
+		{"", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.signal, func(t *testing.T) {
+			got := signalNameToNumber(tt.signal)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestRunSSHCommandNonZeroExit(t *testing.T) {
+	config := SSHConfig{
+		User:     testSSHUser,
+		Host:     testSSHServer,
+		Port:     testSSHPort,
+		KeyPath:  testSSHKey,
+		Password: testPassword,
+	}
+
+	if config.KeyPath == "" && config.Password == "" {
+		t.Skip("SSH authentication not configured")
+	}
+
+	tests := []struct {
+		name     string
+		command  string
+		wantCode int
+	}{
+		{
+			name:     "explicit exit 5",
+			command:  "sh -c 'exit 5'",
+			wantCode: 5,
+		},
+		{
+			name:     "exit 42",
+			command:  "sh -c 'exit 42'",
+			wantCode: 42,
+		},
+		{
+			name:     "exit 1 on error",
+			command:  "sh -c 'false'",
+			wantCode: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, _, _, err := RunSSHCommand(config, tt.command, 10)
+			assert.Equal(t, tt.wantCode, code)
+			assert.NotNil(t, err)
+			assert.Contains(t, err.Error(), "exit-code not zero")
+			assert.Equal(t, tt.wantCode, errors.GetCode(err))
+		})
+	}
+}
+
+func TestRunSSHCommandSignalTermination(t *testing.T) {
+	config := SSHConfig{
+		User:     testSSHUser,
+		Host:     testSSHServer,
+		Port:     testSSHPort,
+		KeyPath:  testSSHKey,
+		Password: testPassword,
+	}
+
+	if config.KeyPath == "" && config.Password == "" {
+		t.Skip("SSH authentication not configured")
+	}
+
+	t.Run("kill with SIGKILL", func(t *testing.T) {
+		code, _, _, err := RunSSHCommand(config, "sh -c 'kill -9 $$'", 5)
+		// SIGKILL: 128 + 9 = 137
+		assert.Equal(t, 137, code)
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "exit-code not zero")
+	})
 }

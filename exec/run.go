@@ -140,6 +140,9 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 		exitCode = 125
 		retErr = errors.WrapE(waitErr, 125, "unexpected command error")
 	}
+	if retErr == nil && exitCode > 0 {
+		retErr = errors.E(exitCode, "exit-code not zero")
+	}
 	return exitCode, string(stdoutBytes), string(stderrBytes), retErr
 }
 
@@ -166,12 +169,14 @@ func RunReturnStdout(command string, timeout int) (string, error) {
 
 // RunWithRetries executes a command up to numRetries times until success.
 // Returns 0 on success, or the last exit code if all retries are exhausted.
-// An error is returned if RunReturnExitCode encounters a non-exit-code error (e.g., timeout).
+// An error is returned if RunReturnAll encounters a non-exit-code error (e.g., timeout).
 func RunWithRetries(cmd string, numRetries int, timeout int) (int, error) {
 	delay := 10 * time.Second
 	var lastCode int
 	for i := 0; i < numRetries; i++ {
-		code, err := RunReturnExitCode(cmd, timeout)
+		code, stdout, stderr, err := RunReturnAll(cmd, timeout)
+		fmt.Printf("exec command:%s\n stdout:\n%s\n", cmd, stdout)
+		fmt.Fprintf(os.Stderr, "exec command: %s\n stderr:\n%s\n", cmd, stderr)
 		if err != nil {
 			return code, err
 		}

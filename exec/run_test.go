@@ -36,14 +36,18 @@ func TestRunReturnAll(t *testing.T) {
 	t.Run("invalid command (bash-level error)", func(t *testing.T) {
 		code, _, _, err := exec.RunReturnAll("invalid_command_xyz", 0)
 		assert.Equal(t, 127, code) // Bash 返回 127 表示命令未找到
-		assert.Nil(t, err)         // 视为正常退出
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "exit-code not zero")
+		assert.Equal(t, 127, errors.GetCode(err))
 	})
 
 	// 4. 显式非零退出码
 	t.Run("explicit non-zero exit code", func(t *testing.T) {
 		code, _, _, err := exec.RunReturnAll("sh -c 'exit 5'", 2)
 		assert.Equal(t, 5, code) // 确定返回码
-		assert.Nil(t, err)
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "exit-code not zero")
+		assert.Equal(t, 5, errors.GetCode(err))
 	})
 
 	// 5. 命令启动失败 (空命令)
@@ -59,7 +63,9 @@ func TestRunReturnAll(t *testing.T) {
 	t.Run("signal termination", func(t *testing.T) {
 		code, _, _, err := exec.RunReturnAll("sh -c 'kill -9 $$'", 2) // 使用 $$ 获取当前 shell 的 PID
 		assert.Equal(t, 137, code)                                    // SIGKILL 对应退出码 128 + 9 = 137
-		assert.Nil(t, err)
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), "exit-code not zero")
+		assert.Equal(t, 137, errors.GetCode(err))
 	})
 
 	// 7. 多线程安全

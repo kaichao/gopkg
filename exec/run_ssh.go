@@ -119,15 +119,25 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 	select {
 	case waitErr := <-done:
 		wg.Wait()
+		var retErr error
 		if waitErr != nil {
 			if exitErr, ok := waitErr.(*ssh.ExitError); ok {
 				exitCode = exitErr.ExitStatus()
+				// Handle signal termination
+				if signal := exitErr.Signal(); signal != "" {
+					if sigNum := signalNameToNumber(signal); sigNum > 0 {
+						exitCode = 128 + sigNum
+					}
+				}
 			} else {
 				exitCode = 125
-				return exitCode, "", "", errors.WrapE(waitErr, 125, "unexpected command error")
+				retErr = errors.WrapE(waitErr, 125, "unexpected command error")
 			}
 		}
-		return exitCode, stdoutBuf.String(), stderrBuf.String(), nil
+		if retErr == nil && exitCode > 0 {
+			retErr = errors.E(exitCode, "exit-code not zero")
+		}
+		return exitCode, stdoutBuf.String(), stderrBuf.String(), retErr
 	case <-ctx.Done():
 		// Timeout or cancellation
 		if ctx.Err() == context.DeadlineExceeded {
@@ -359,6 +369,77 @@ func cleanupProcesses(client *ssh.Client, command string, marker string) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return nil
+}
+
+// signalNameToNumber maps SSH signal names to their numeric values.
+// Returns 0 for unknown signals.
+func signalNameToNumber(signal string) int {
+	switch signal {
+	case "HUP":
+		return 1
+	case "INT":
+		return 2
+	case "QUIT":
+		return 3
+	case "ILL":
+		return 4
+	case "TRAP":
+		return 5
+	case "ABRT":
+		return 6
+	case "BUS":
+		return 7
+	case "FPE":
+		return 8
+	case "KILL":
+		return 9
+	case "USR1":
+		return 10
+	case "SEGV":
+		return 11
+	case "USR2":
+		return 12
+	case "PIPE":
+		return 13
+	case "ALRM":
+		return 14
+	case "TERM":
+		return 15
+	case "STKFLT":
+		return 16
+	case "CHLD":
+		return 17
+	case "CONT":
+		return 18
+	case "STOP":
+		return 19
+	case "TSTP":
+		return 20
+	case "TTIN":
+		return 21
+	case "TTOU":
+		return 22
+	case "URG":
+		return 23
+	case "XCPU":
+		return 24
+	case "XFSZ":
+		return 25
+	case "VTALRM":
+		return 26
+	case "PROF":
+		return 27
+	case "WINCH":
+		return 28
+	case "IO":
+		return 29
+	case "PWR":
+		return 30
+	case "SYS":
+		return 31
+	default:
+		return 0
+	}
 }
 
 // SSHConfig defines SSH connection parameters
