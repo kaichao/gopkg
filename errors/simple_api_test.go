@@ -1,6 +1,7 @@
 package errors_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/kaichao/gopkg/errors"
@@ -264,16 +265,23 @@ func TestGetCode(t *testing.T) {
 		t.Errorf("Expected code 1001, got %d", code)
 	}
 
-	// Test with non-coded error (default -1)
+	// Test with non-coded error (default 1)
 	err2 := errors.New("test error")
 	code = errors.GetCode(err2)
-	if code != -1 {
-		t.Errorf("Expected code -1, got %d", code)
+	if code != 1 {
+		t.Errorf("Expected code 1 (default), got %d", code)
 	}
 
 	// Test with nil error
 	code = errors.GetCode(nil)
+	if code != 0 {
+		t.Errorf("Expected code 0 for nil error, got %d", code)
+	}
+
+	// Test with non-TracedError
+	stdErr := fmt.Errorf("standard error")
+	code = errors.GetCode(stdErr)
 	if code != -1 {
-		t.Errorf("Expected code -1 for nil error, got %d", code)
+		t.Errorf("Expected code -1 for non-TracedError, got %d", code)
 	}
 }

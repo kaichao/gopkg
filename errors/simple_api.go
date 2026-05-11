@@ -38,13 +38,13 @@ func toInt(v any) (int, bool) {
 // This is shared by E() and WrapE() to avoid duplicate parsing logic.
 // Returns:
 //   - msg: the extracted error message
-//   - code: the extracted error code (-1 if not specified)
+//   - code: the extracted error code (1 if not specified)
 //   - startIdx: the index where key-value pairs begin in args
 func parseEArgs(args []any) (msg string, code int, startIdx int) {
-	code = -1 // Default code
+	code = 1 // Default code
 
 	if len(args) == 0 {
-		return "", -1, 0
+		return "", 1, 0
 	}
 
 	// Check if first arg is an integer type (error code)
@@ -58,7 +58,7 @@ func parseEArgs(args []any) (msg string, code int, startIdx int) {
 			} else {
 				// If second arg is not string, treat first arg as message
 				msg = fmt.Sprintf("%s", args[0])
-				code = -1
+				code = 1
 				startIdx = 1
 			}
 		} else {
@@ -137,7 +137,7 @@ func WrapE(err error, args ...any) error {
 
 	// Create wrapped error, skip 1 for WrapE function
 	wrapped := Wrap(err, msg, 1)
-	if code != -1 {
+	if code != 1 {
 		wrapped.Code = code
 	}
 
@@ -160,10 +160,11 @@ func MustValue[T any](value T, err error) T {
 	return value
 }
 
-// GetCode returns the error code if available
+// GetCode returns the error code from a TracedError.
+// Returns 0 if err is nil, -1 if err is not a *TracedError.
 func GetCode(err error) int {
 	if err == nil {
-		return -1
+		return 0
 	}
 
 	if te, ok := err.(*TracedError); ok {

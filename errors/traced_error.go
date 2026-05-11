@@ -10,7 +10,7 @@ import (
 // TracedError represents an error with tracing information.
 type TracedError struct {
 	Message   string         // Error message
-	Code      int            // Error code for programmatic handling (optional, default -1)
+	Code      int            // Error code for programmatic handling (optional, default 1)
 	Location  string         // Where it happened (file:line:function)
 	Timestamp time.Time      // When it happened
 	Context   map[string]any // Context information
@@ -25,7 +25,7 @@ type TracedError struct {
 //	New("message", code, skip)        // Error with code and custom skip
 func New(msg string, args ...int) *TracedError {
 	skip := 1 // Default skip for direct calls
-	var code int = -1
+	var code int = 1
 
 	// Parse arguments
 	if len(args) == 1 {
@@ -74,7 +74,7 @@ func Wrap(err error, msg string, skip ...int) *TracedError {
 
 	tracedErr := &TracedError{
 		Message:   combinedMsg,
-		Code:      -1, // Default code for wrapped errors
+		Code:      1, // Default code for wrapped errors
 		Location:  fmt.Sprintf("%s:%d:%s", file, line, fn.Name()),
 		Timestamp: time.Now(),
 		Context:   make(map[string]any),
@@ -144,7 +144,7 @@ func (e *TracedError) GoString() string {
 
 	fmt.Fprintf(&sb, "Message: %q", e.Message)
 
-	if e.Code != -1 {
+	if e.Code != 1 {
 		fmt.Fprintf(&sb, ", Code: %d", e.Code)
 	}
 
@@ -182,7 +182,7 @@ func (e *TracedError) Detailed() string {
 	sb.WriteString(fmt.Sprintf("Location: %s\n", e.Location))
 	sb.WriteString(fmt.Sprintf("Time: %s\n", e.Timestamp.Format("2006-01-02 15:04:05")))
 
-	if e.Code != -1 {
+	if e.Code != 1 {
 		sb.WriteString(fmt.Sprintf("Code: %d\n", e.Code))
 	}
 
@@ -226,7 +226,7 @@ func (e *TracedError) GetFullChain() []*TracedError {
 			// Wrap non-TracedError nodes so the chain includes them
 			te = &TracedError{
 				Message:   cause.Error(),
-				Code:      -1,
+				Code:      1,
 				Location:  "",
 				Timestamp: time.Now(),
 				Context:   make(map[string]any),
