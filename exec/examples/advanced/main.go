@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/kaichao/gopkg/errors"
 	"github.com/kaichao/gopkg/exec"
 )
 
@@ -17,11 +18,11 @@ func main() {
 	}
 
 	// Note: This example assumes SSH connectivity
-	// code, out, errOut, err := exec.RunSSHCommand(config, "docker ps -a", 30)
+	// out, errOut, err := exec.RunSSHCommand(config, "docker ps -a", 30)
 	// if err != nil {
-	//     log.Printf("SSH execution failed: %v", err)
+	//     log.Printf("SSH execution failed: %v (code=%d)", err, errors.GetCode(err))
 	// } else {
-	//     fmt.Printf("Exit code: %d\nOutput: %s\n", code, out)
+	//     fmt.Printf("Exit code: %d\nOutput: %s\n", errors.GetCode(err), out)
 	// }
 
 	fmt.Println("SSH example would run here with proper credentials")
@@ -37,8 +38,8 @@ func main() {
 
 	// Example 3: CI/CD pipeline health check
 	fmt.Println("\n=== Example 3: CI/CD pipeline health check ===")
-	code, out, _, _ := exec.RunReturnAll("curl -sSf http://localhost:8080/health", 10)
-	if code != 0 {
+	out, _, err := exec.RunReturnAll("curl -sSf http://localhost:8080/health", 10)
+	if errors.GetCode(err) != 0 {
 		log.Fatal("Service health check failed")
 	}
 	fmt.Printf("Health check passed: %s\n", out[:min(50, len(out))])
@@ -59,7 +60,7 @@ func main() {
 	// 	Background: true,
 	// 	KeyPath:    "/home/user/.ssh/id_rsa",
 	// }
-	// _, pid, _, _ := exec.RunSSHCommand(bgConfig, "long-running-command", 0)
+	// pid, _, _ := exec.RunSSHCommand(bgConfig, "long-running-command", 0)
 
 	// Example 6: Command with retries
 	fmt.Println("\n=== Example 6: Command with retries ===")
@@ -72,17 +73,15 @@ func main() {
 
 	// Example 7: Timeout handling
 	fmt.Println("\n=== Example 7: Timeout handling ===")
-	code, _, _, err := exec.RunReturnAll("sleep 5", 1)
+	_, _, err = exec.RunReturnAll("sleep 5", 1)
 	if err != nil {
-		fmt.Printf("Command timed out as expected: %v (exit code: %d)\n", err, code)
+		fmt.Printf("Command timed out as expected: %v (exit code: %d)\n", err, errors.GetCode(err))
 	}
 
 	// Example 8: Security considerations
 	fmt.Println("\n=== Example 8: Security considerations ===")
-	// Safe command construction
 	userInput := "../sensitive/path"
 	safeCmd := fmt.Sprintf("ls %s", userInput)
-	// In real code, use filepath.Clean() or other sanitization
 	fmt.Printf("Safe command would be: %s\n", safeCmd)
 }
 

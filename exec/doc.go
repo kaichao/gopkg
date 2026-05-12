@@ -18,9 +18,9 @@
 //
 //	import "github.com/kaichao/gopkg/exec"
 //
-//	code, stdout, stderr, err := exec.RunReturnAll("ls -l /tmp", 10)
+//	stdout, stderr, err := exec.RunReturnAll("ls -l /tmp", 10)
 //	if err != nil {
-//		log.Printf("Execution failed: %v\nOutput: %s\nError: %s", err, stdout, stderr)
+//		log.Printf("Execution failed: %v, code=%d", err, errors.GetCode(err))
 //	}
 //
 // SSH Remote Execution:
@@ -31,15 +31,13 @@
 //		KeyPath: "/home/user/.ssh/id_rsa",
 //	}
 //
-//	code, out, errOut, err := exec.RunSSHCommand(config, "docker ps -a", 30)
+//	out, errOut, err := exec.RunSSHCommand(config, "docker ps -a", 30)
 //
 // Key Functions:
 //
-//	RunReturnAll(command string, timeout int) (code int, stdout string, stderr string, err error)
-//	RunReturnExitCode(command string, timeout int) (code int, error)
-//	RunReturnStdout(command string, timeout int) (string, error)
+//	RunReturnAll(command string, timeout int) (stdout string, stderr string, err error)
+//	RunSSHCommand(config SSHConfig, command string, timeout int) (stdout string, stderr string, err error)
 //	RunWithRetries(cmd string, numRetries int, timeout int) (int, error)
-//	RunSSHCommand(config SSHConfig, command string, timeout int) (code int, stdout string, stderr string, err error)
 //
 // Exit Code Convention:
 //   - 0: Command executed successfully
@@ -47,6 +45,8 @@
 //   - 125: Command execution failed (e.g., pipe creation, process start)
 //   - Other non-zero: Command-specific exit code
 //   - 128 + signal: Command terminated by signal (e.g., SIGKILL = 128+9 = 137)
+//
+// The exit code is embedded in the returned error. Use errors.GetCode(err) to retrieve it.
 //
 // SSH Configuration:
 //
@@ -67,8 +67,8 @@
 //
 // Error Handling:
 // - All functions return consistent error types following gopkg/errors conventions
+// - Exit codes are embedded in TracedError, retrievable via errors.GetCode(err)
 // - Timeouts are distinguished from other execution errors
-// - Non-zero exit codes are not considered errors (err is nil)
 //
 // Security Considerations:
 // - SSH private keys should have 600 permissions

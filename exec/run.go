@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -15,24 +14,20 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// RunReturnAll executes a command and returns its exit code, stdout, stderr, and any error.
+// RunReturnAll executes a command and returns stdout, stderr, and any error.
+// The error code can be retrieved via errors.GetCode(err).
 //
 // Params:
 //   - command: the command string to execute
 //   - timeout: timeout in seconds (0 for no timeout)
 //
-// Returns: (exitCode, stdout, stderr, err)
-//   - exitCode: command exit code (0 for success, non-zero for command failure or timeout)
+// Returns: (stdout, stderr, err)
 //   - stdout: standard output
 //   - stderr: standard error
-//   - err: error encountered during execution (e.g., pipe creation failure, command start failure, timeout). If command exits with non-zero exit code, err is nil
-//   - If pipe creation or command start fails, returns exit code 125 and specific error
-//   - In timeout case, returns exit code 124 and err = "command timed out"
-//   - If command ends with non-zero exit code, returns that exit code and err = nil
-//   - Other unexpected errors returned via err with exit code 125
-func RunReturnAll(command string, timeout int) (int, string, string, error) {
+//   - err: error with embedded exit code, retrievable via errors.GetCode(err)
+func RunReturnAll(command string, timeout int) (string, string, error) {
 	if command == "" {
-		return 125, "", "", errors.E(125, "start command failed: empty command")
+		return "", "", errors.E(125, "start command failed: empty command")
 	}
 
 	baseCtx := context.Background()
@@ -59,11 +54,11 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 	// Get output pipes
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return 125, "", "", errors.WrapE(err, 125, "capture stdout pipe failed")
+		return "", "", errors.WrapE(err, 125, "capture stdout pipe failed")
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return 125, "", "", errors.WrapE(err, 125, "capture stderr pipe failed")
+		return "", "", errors.WrapE(err, 125, "capture stderr pipe failed")
 	}
 
 	// Use circular buffer to capture output
@@ -92,7 +87,7 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 
 	// Start command
 	if err := cmd.Start(); err != nil {
-		return 125, "", "", errors.WrapE(err, 125, "start command failed")
+		return "", "", errors.WrapE(err, 125, "start command failed")
 	}
 
 	// Terminate process group after timeout
@@ -115,7 +110,7 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 	stderrBytes := stderrBuf.Bytes()
 
 	if waitErr == nil {
-		return 0, string(stdoutBytes), string(stderrBytes), nil
+		return string(stdoutBytes), string(stderrBytes), nil
 	}
 
 	// waitErr != nil, handle exit code and errors
@@ -143,28 +138,7 @@ func RunReturnAll(command string, timeout int) (int, string, string, error) {
 	if retErr == nil && exitCode > 0 {
 		retErr = errors.E(exitCode, "exit-code not zero")
 	}
-	return exitCode, string(stdoutBytes), string(stderrBytes), retErr
-}
-
-// RunReturnExitCode ...
-func RunReturnExitCode(command string, timeout int) (int, error) {
-	code, stdout, stderr, err := RunReturnAll(command, timeout)
-	fmt.Printf("exec command:%s\n stdout:\n%s\n", command, stdout)
-	fmt.Fprintf(os.Stderr, "exec command: %s\n stderr:\n%s\n", command, stderr)
-	return code, err
-}
-
-// RunReturnStdout ...
-func RunReturnStdout(command string, timeout int) (string, error) {
-	code, stdout, stderr, err := RunReturnAll(command, timeout)
-	if code != 0 {
-		fmt.Fprintf(os.Stderr, "exec command:%s\nexit-code=%d\n", command, code)
-		// stdout = ""
-	}
-	fmt.Fprintf(os.Stderr, "exec command:\n%s\n%s\n", command, stderr)
-
-	// remove leading/tail space
-	return strings.TrimSpace(stdout), err
+	return string(stdoutBytes), string(stderrBytes), retErr
 }
 
 // RunWithRetries executes a command up to numRetries times until success.
@@ -174,9 +148,10 @@ func RunWithRetries(cmd string, numRetries int, timeout int) (int, error) {
 	delay := 10 * time.Second
 	var lastCode int
 	for i := 0; i < numRetries; i++ {
-		code, stdout, stderr, err := RunReturnAll(cmd, timeout)
+		stdout, stderr, err := RunReturnAll(cmd, timeout)
 		fmt.Printf("exec command:%s\n stdout:\n%s\n", cmd, stdout)
 		fmt.Fprintf(os.Stderr, "exec command: %s\n stderr:\n%s\n", cmd, stderr)
+		code := errors.GetCode(err)
 		if err != nil {
 			return code, err
 		}

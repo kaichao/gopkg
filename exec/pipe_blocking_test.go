@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kaichao/gopkg/errors"
 )
 
 // TestPipeBlockingFix specifically tests the fix for pipe blocking issues
@@ -70,7 +72,7 @@ func TestPipeBlockingFix(t *testing.T) {
 			config.Background = tt.background
 			start := time.Now()
 
-			code, stdout, stderr, err := RunSSHCommand(config, tt.command, tt.timeout)
+			stdout, stderr, err := RunSSHCommand(config, tt.command, tt.timeout)
 			duration := time.Since(start)
 
 			// Verify timeout duration control
@@ -81,8 +83,8 @@ func TestPipeBlockingFix(t *testing.T) {
 			}
 
 			// Verify exit code
-			if code != tt.expectCode {
-				t.Errorf("Expected exit code %d, got %d", tt.expectCode, code)
+			if errors.GetCode(err) != tt.expectCode {
+				t.Errorf("Expected exit code %d, got %d", tt.expectCode, errors.GetCode(err))
 			}
 
 			// Verify error message
@@ -113,7 +115,7 @@ func TestPipeBlockingFix(t *testing.T) {
 			}
 
 			t.Logf("Test completed in %v, code=%d, stdout_len=%d, stderr_len=%d",
-				duration, code, len(stdout), len(stderr))
+				duration, errors.GetCode(err), len(stdout), len(stderr))
 		})
 	}
 
@@ -139,10 +141,10 @@ func TestResourceCleanupOnTimeout(t *testing.T) {
 	// Test 1: non-background command timeout resource cleanup
 	t.Run("non-background timeout cleanup", func(t *testing.T) {
 		cmd := "sleep 30"
-		code, _, _, err := RunSSHCommand(config, cmd, 2)
+		_, _, err := RunSSHCommand(config, cmd, 2)
 
-		if code != 124 {
-			t.Errorf("Expected timeout code 124, got %d", code)
+		if errors.GetCode(err) != 124 {
+			t.Errorf("Expected timeout code 124, got %d", errors.GetCode(err))
 		}
 		if err == nil || !strings.Contains(err.Error(), "timed out") {
 			t.Errorf("Expected timeout error, got %v", err)
@@ -150,9 +152,9 @@ func TestResourceCleanupOnTimeout(t *testing.T) {
 
 		// Verify no residual sleep processes
 		verifyCmd := "ps aux | grep '[s]leep 30' | wc -l"
-		verifyCode, verifyOut, _, _ := RunSSHCommand(config, verifyCmd, 5)
+		verifyOut, _, verifyErr := RunSSHCommand(config, verifyCmd, 5)
 
-		if verifyCode == 0 {
+		if errors.GetCode(verifyErr) == 0 {
 			count := strings.TrimSpace(verifyOut)
 			if count != "0" {
 				t.Errorf("Found %s residual sleep processes after timeout", count)
@@ -166,11 +168,11 @@ func TestResourceCleanupOnTimeout(t *testing.T) {
 		bgConfig.Background = true
 
 		cmd := "sleep 60"
-		code, pid, _, err := RunSSHCommand(bgConfig, cmd, 2)
+		pid, _, err := RunSSHCommand(bgConfig, cmd, 2)
 
 		// Background command startup should succeed
-		if code != 0 {
-			t.Errorf("Expected background startup code 0, got %d", code)
+		if errors.GetCode(err) != 0 {
+			t.Errorf("Expected background startup code 0, got %d", errors.GetCode(err))
 		}
 		if err != nil {
 			t.Errorf("Unexpected error during background startup: %v", err)

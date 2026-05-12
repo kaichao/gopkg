@@ -337,7 +337,10 @@ email, _ := emailCache.Get(123)
 import "github.com/kaichao/gopkg/exec"
 
 // Local execution
-code, stdout, stderr, err := exec.RunReturnAll("ls -l /tmp", 10)
+stdout, stderr, err := exec.RunReturnAll("ls -l /tmp", 10)
+if err != nil {
+    log.Printf("Command failed: %v (code=%d)", err, errors.GetCode(err))
+}
 
 // SSH execution
 sshConfig := exec.SSHConfig{
@@ -345,7 +348,7 @@ sshConfig := exec.SSHConfig{
     User: "admin",
     KeyPath: "/path/to/key",
 }
-code, stdout, stderr, err := exec.RunSSHCommand(sshConfig, "ps aux", 30)
+stdout, stderr, err = exec.RunSSHCommand(sshConfig, "ps aux", 30)
 ```
 
 ### Parameter Management with Cobra

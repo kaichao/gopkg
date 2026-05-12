@@ -17,10 +17,10 @@ import (
 )
 
 // RunSSHCommand executes command via SSH with full lifecycle management
-func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, string, error) {
+func RunSSHCommand(config SSHConfig, command string, timeout int) (string, string, error) {
 	client, ctx, cancel, err := createSSHClient(config, timeout)
 	if err != nil {
-		return 125, "", "", err
+		return "", "", err
 	}
 	defer client.Close()
 	if cancel != nil {
@@ -29,7 +29,7 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 
 	session, err := client.NewSession()
 	if err != nil {
-		return 125, "", "", errors.WrapE(err, 125, "ssh: create session failed")
+		return "", "", errors.WrapE(err, 125, "ssh: create session failed")
 	}
 	defer func() {
 		if session != nil {
@@ -48,7 +48,7 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 		if err := session.Start(wrappedCmd); err != nil {
 			// Clean up any processes that may have started
 			_ = cleanupProcesses(client, command, marker)
-			return 125, "", "", errors.WrapE(err, 125, "start background command failed")
+			return "", "", errors.WrapE(err, 125, "start background command failed")
 		}
 
 		// Use a dedicated startup context (10s) for background commands.
@@ -71,20 +71,20 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 		case <-startupCtx.Done():
 			// Timeout during startup - clean up remote processes
 			_ = cleanupProcesses(client, command, marker)
-			return 124, "", "", errors.E(124, "background command timed out during startup")
+			return "", "", errors.E(124, "background command timed out during startup")
 		}
 
 		// Wait for output goroutines to finish reading all data
 		wg.Wait()
 		if stdoutBuf.Len() == 0 {
 			_ = cleanupProcesses(client, command, marker)
-			return 125, "", "", errors.E(125, "empty background command output")
+			return "", "", errors.E(125, "empty background command output")
 		}
 		pidLine := strings.TrimSpace(stdoutBuf.String())
 		lines := strings.Split(pidLine, "\n")
 		if len(lines) == 0 {
 			_ = cleanupProcesses(client, command, marker)
-			return 125, "", "", errors.E(125, "empty background command output")
+			return "", "", errors.E(125, "empty background command output")
 		}
 
 		// Find the line with "PID MARKER_xxx" format (the second line from wrapCommand)
@@ -96,18 +96,18 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 			fields := strings.Fields(line)
 			if len(fields) == 2 && strings.HasPrefix(fields[1], "MARKER_") {
 				// Return the actual PID as stdout, zero exit code
-				return 0, fields[0], "", nil
+				return fields[0], "", nil
 			}
 		}
 
 		_ = cleanupProcesses(client, command, marker)
-		return 125, "", "", errors.E(125, fmt.Sprintf("invalid PID marker format, got: %q", pidLine))
+		return "", "", errors.E(125, fmt.Sprintf("invalid PID marker format, got: %q", pidLine))
 	}
 
 	// Normal synchronous command execution
 	stdoutBuf, stderrBuf, wg = captureOutput(ctx, session)
 	if err := session.Start(command); err != nil {
-		return 125, "", "", errors.WrapE(err, 125, "start command failed")
+		return "", "", errors.WrapE(err, 125, "start command failed")
 	}
 
 	// Wait for command completion with timeout
@@ -137,7 +137,7 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 		if retErr == nil && exitCode > 0 {
 			retErr = errors.E(exitCode, "exit-code not zero")
 		}
-		return exitCode, stdoutBuf.String(), stderrBuf.String(), retErr
+		return stdoutBuf.String(), stderrBuf.String(), retErr
 	case <-ctx.Done():
 		// Timeout or cancellation
 		if ctx.Err() == context.DeadlineExceeded {
@@ -155,9 +155,9 @@ func RunSSHCommand(config SSHConfig, command string, timeout int) (int, string, 
 			stdout := stdoutBuf.String()
 			stderr := stderrBuf.String()
 			_ = session.Close()
-			return 124, stdout, stderr, errors.E(124, "command timed out")
+			return stdout, stderr, errors.E(124, "command timed out")
 		}
-		return 125, "", "", errors.WrapE(ctx.Err(), 125, "context cancelled")
+		return "", "", errors.WrapE(ctx.Err(), 125, "context cancelled")
 	}
 }
 

@@ -99,12 +99,12 @@ func TestRunSingularityCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			code, stdout, stderr, err := RunSSHCommand(config, tt.command, tt.timeout)
+			stdout, stderr, err := RunSSHCommand(config, tt.command, tt.timeout)
 			if err != nil {
 				t.Errorf("RunSSHCommand() error = %v", err)
 			}
-			if code != tt.wantCode {
-				t.Errorf("RunSSHCommand() code = %v, want %v", code, tt.wantCode)
+			if errors.GetCode(err) != tt.wantCode {
+				t.Errorf("RunSSHCommand() code = %v, want %v", errors.GetCode(err), tt.wantCode)
 				t.Logf("stdout: %s", stdout)
 				t.Logf("stderr: %s", stderr)
 			}
@@ -124,12 +124,12 @@ func TestBackgroundCommand(t *testing.T) {
 
 	// Test background command with output
 	command := "echo startup_message; sleep 60"
-	code, pid, stderr, err := RunSSHCommand(config, command, 10)
+	pid, stderr, err := RunSSHCommand(config, command, 10)
 	if err != nil {
 		t.Fatalf("RunSSHCommand failed: %v", err)
 	}
-	if code != 0 {
-		t.Errorf("Expected exit code 0, got %d", code)
+	if errors.GetCode(err) != 0 {
+		t.Errorf("Expected exit code 0, got %d", errors.GetCode(err))
 		t.Logf("stderr: %s", stderr)
 	}
 
@@ -154,8 +154,8 @@ func TestBackgroundCommand(t *testing.T) {
 
 	// Cleanup with explicit error handling
 	killCmd := fmt.Sprintf("kill -9 %s", pidVal)
-	killCode, _, killOut, killErr := RunSSHCommand(config, killCmd, 5)
-	if killCode != 0 && killErr != nil {
+	_, killOut, killErr := RunSSHCommand(config, killCmd, 5)
+	if errors.GetCode(killErr) != 0 && killErr != nil {
 		t.Logf("Cleanup warning: %v", killErr)
 		t.Logf("Cleanup output: %s", killOut)
 	}
@@ -181,12 +181,12 @@ func TestProcessCleanup(t *testing.T) {
 	command := "sleep 30" // use a shorter sleep time
 
 	// Start background command and get PID
-	code, pidOutput, _, err := RunSSHCommand(bgConfig, command, 5)
+	pidOutput, _, err := RunSSHCommand(bgConfig, command, 5)
 	if err != nil {
 		t.Fatalf("Failed to start background command: %v", err)
 	}
-	if code != 0 {
-		t.Fatalf("Expected exit code 0, got %d", code)
+	if errors.GetCode(err) != 0 {
+		t.Fatalf("Expected exit code 0, got %d", errors.GetCode(err))
 	}
 
 	// Background command only returns PID
@@ -198,7 +198,7 @@ func TestProcessCleanup(t *testing.T) {
 	t.Logf("Started process with PID: %s", pid)
 
 	// Verify the process is running (use non-background config)
-	_, psOutput, _, _ := RunSSHCommand(config, "ps -p "+pid+" -o pid= 2>/dev/null || echo 'NOT_FOUND'", 5)
+	psOutput, _, _ := RunSSHCommand(config, "ps -p "+pid+" -o pid= 2>/dev/null || echo 'NOT_FOUND'", 5)
 	if strings.Contains(psOutput, "NOT_FOUND") {
 		t.Fatalf("Process %s not found after startup", pid)
 	}
@@ -240,12 +240,12 @@ func TestProcessCleanup(t *testing.T) {
 
 	allTerminated := true
 	for _, verify := range verifyCmds {
-		code, output, _, _ := RunSSHCommand(config, verify.cmd, 5) // non-background: verify directly
+		output, _, _ := RunSSHCommand(config, verify.cmd, 5) // non-background: verify directly
 		output = strings.TrimSpace(output)
 
 		// If command succeeded (exit code 0) and output is empty or "0", process does not exist
 		// Or output contains expected termination message, process has terminated
-		if code == 0 && (output == "" || output == "0") {
+		if errors.GetCode(err) == 0 && (output == "" || output == "0") {
 			// Command succeeded with empty or "0" output, process not found
 			t.Logf("Process verification passed for command '%s': output='%s' (process not found)", verify.cmd, output)
 		} else if output == verify.successValue {
@@ -254,7 +254,7 @@ func TestProcessCleanup(t *testing.T) {
 		} else {
 			// Command succeeded with non-empty output, process may still be running
 			allTerminated = false
-			t.Logf("Process verification failed for command '%s': code=%d, output='%s'", verify.cmd, code, output)
+			t.Logf("Process verification failed for command '%s': code=%d, output='%s'", verify.cmd, errors.GetCode(err), output)
 		}
 	}
 
@@ -283,11 +283,11 @@ func TestCommandTimeout(t *testing.T) {
 	t.Run("non-background command timeout", func(t *testing.T) {
 		cmd := "sleep 10"
 		start := time.Now()
-		code, _, _, err := RunSSHCommand(config, cmd, 2)
+		_, _, err := RunSSHCommand(config, cmd, 2)
 		duration := time.Since(start)
 
-		if code != 124 {
-			t.Errorf("Expected exit code 124, got %d", code)
+		if errors.GetCode(err) != 124 {
+			t.Errorf("Expected exit code 124, got %d", errors.GetCode(err))
 		}
 		if err == nil || !strings.Contains(err.Error(), "timed out") {
 			t.Errorf("Expected timeout error, got %v", err)
@@ -306,12 +306,12 @@ func TestCommandTimeout(t *testing.T) {
 		// The wrapCommand script itself is fast, so test a normal background command
 		cmd := "sleep 60" // long-running command
 		start := time.Now()
-		code, _, _, err := RunSSHCommand(bgConfig, cmd, 2)
+		_, _, err := RunSSHCommand(bgConfig, cmd, 2)
 		duration := time.Since(start)
 
 		// Background command startup should succeed because wrapCommand is fast
-		if code != 0 {
-			t.Errorf("Expected exit code 0 for background command startup, got %d", code)
+		if errors.GetCode(err) != 0 {
+			t.Errorf("Expected exit code 0 for background command startup, got %d", errors.GetCode(err))
 		}
 		if err != nil {
 			t.Errorf("Expected no error for background command startup, got %v", err)
@@ -328,11 +328,11 @@ func TestCommandTimeout(t *testing.T) {
 
 		// Use a fast command
 		cmd := "echo 'quick command'"
-		code, pidOutput, _, err := RunSSHCommand(bgConfig, cmd, 5)
+		pidOutput, _, err := RunSSHCommand(bgConfig, cmd, 5)
 
 		// Background command should start successfully and return PID
-		if code != 0 {
-			t.Errorf("Expected exit code 0 for background command, got %d", code)
+		if errors.GetCode(err) != 0 {
+			t.Errorf("Expected exit code 0 for background command, got %d", errors.GetCode(err))
 		}
 		if err != nil {
 			t.Errorf("Expected no error for background command, got %v", err)
@@ -359,11 +359,11 @@ func TestCommandTimeout(t *testing.T) {
 		cmd := "sleep 10"
 
 		start := time.Now()
-		code, _, _, err := RunSSHCommand(config, cmd, 2)
+		_, _, err := RunSSHCommand(config, cmd, 2)
 		duration := time.Since(start)
 
-		if code != 124 {
-			t.Errorf("Expected exit code 124, got %d", code)
+		if errors.GetCode(err) != 124 {
+			t.Errorf("Expected exit code 124, got %d", errors.GetCode(err))
 		}
 		if err == nil || !strings.Contains(err.Error(), "timed out") {
 			t.Errorf("Expected timeout error, got %v", err)
@@ -410,9 +410,9 @@ func TestResourceCleanup(t *testing.T) {
 			fi
 		`, pidFile, pidFile, pidFile, pidFile)
 
-		code, out, _, _ := RunSSHCommand(config, cleanCmd, 5)
+		out, _, err := RunSSHCommand(config, cleanCmd, 5)
 		t.Logf("Cleanup output: %s", out)
-		return code == 0 && strings.Contains(out, "missing")
+		return errors.GetCode(err) == 0 && strings.Contains(out, "missing")
 	}, 30*time.Second, 2*time.Second, "Resource cleanup failed")
 }
 
@@ -502,8 +502,8 @@ func TestRunSSHCommandNonZeroExit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			code, _, _, err := RunSSHCommand(config, tt.command, 10)
-			assert.Equal(t, tt.wantCode, code)
+			_, _, err := RunSSHCommand(config, tt.command, 10)
+			assert.Equal(t, tt.wantCode, errors.GetCode(err))
 			assert.NotNil(t, err)
 			assert.Contains(t, err.Error(), "exit-code not zero")
 			assert.Equal(t, tt.wantCode, errors.GetCode(err))
@@ -525,9 +525,9 @@ func TestRunSSHCommandSignalTermination(t *testing.T) {
 	}
 
 	t.Run("kill with SIGKILL", func(t *testing.T) {
-		code, _, _, err := RunSSHCommand(config, "sh -c 'kill -9 $$'", 5)
+		_, _, err := RunSSHCommand(config, "sh -c 'kill -9 $$'", 5)
 		// SIGKILL: 128 + 9 = 137
-		assert.Equal(t, 137, code)
+		assert.Equal(t, 137, errors.GetCode(err))
 		assert.NotNil(t, err)
 		assert.Contains(t, err.Error(), "exit-code not zero")
 	})
