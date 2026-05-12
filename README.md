@@ -27,6 +27,8 @@ Structured logging with error tracing, async output, log rotation, and sensitive
 ### 7. `param`
 Unified command line parameter management for Go with Cobra, supporting multiple data types, environment variables, dynamic defaults, and validation.
 
+### 8. `self`
+Runtime introspection utilities: goroutine/thread/process identity, stack traces, and function name resolution.
 
 ## License
 
