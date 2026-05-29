@@ -24,25 +24,25 @@ go get github.com/kaichao/gopkg/asyncbatch
 package main
 
 import (
-	"fmt"
-	"time"
-	"github.com/kaichao/gopkg/asyncbatch"
+    "fmt"
+    "time"
+    "github.com/kaichao/gopkg/asyncbatch"
 )
 
 func main() {
-	bp, _ := asyncbatch.NewBatchProcessor[int](
-		func(batch []int) {
-			fmt.Printf("Processing batch: %v\n", batch)
-		},
-		asyncbatch.WithMaxSize(100),
-		asyncbatch.WithNumWorkers(2),
-	)
-	defer bp.Shutdown()
+    bp, _ := asyncbatch.NewBatchProcessor[int](
+        func(batch []int) {
+            fmt.Printf("Processing batch: %v\n", batch)
+        },
+        asyncbatch.WithMaxSize(100),
+        asyncbatch.WithNumWorkers(2),
+    )
+    defer bp.Shutdown()
 
-	for i := 0; i < 500; i++ {
-		bp.Add(i)
-	}
-	time.Sleep(time.Second)
+    for i := 0; i < 500; i++ {
+        bp.Add(i)
+    }
+    time.Sleep(time.Second)
 }
 ```
 
@@ -66,8 +66,6 @@ Key configuration parameters:
 | `fixedWait` | 5ms | Wait time for initial task checks |
 | `underfilledWait` | 20ms | Wait time for underfilled batches |
 | `numWorkers` | 1 | Number of parallel workers (1-8) |
-
-**Note**: The `upperRatio` parameter is currently unused and setting it has no effect.
 
 ## Examples
 

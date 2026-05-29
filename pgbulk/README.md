@@ -5,7 +5,7 @@ Lightweight Go package for high-performance PostgreSQL bulk operations.
 ## Features
 
 - **Batch Processing**: Automatically chunks large datasets into optimal batches
-- **SQL Templates**: Reusable templates with dynamic placeholders  
+- **SQL Templates**: Reusable templates with dynamic placeholders
 - **Full CRUD Support**: `INSERT`, `UPDATE`, and `INSERT...RETURNING` operations
 - **PG-Compatible**: Respects PostgreSQL's parameter limits
 - **Error Handling**: Enhanced error tracing with `github.com/kaichao/gopkg/errors`
@@ -56,7 +56,7 @@ For comprehensive examples, see the [examples directory](examples/).
 ## API Reference
 
 - **Copy**: Bulk insert using PostgreSQL's COPY command
-- **Insert**: Insert data with optional ON CONFLICT clause  
+- **Insert**: Insert data with optional ON CONFLICT clause
 - **InsertReturningID**: Insert data and return IDs of inserted rows
 - **Update**: Bulk update with error tracking
 
