@@ -63,8 +63,8 @@ func RunReturnAll(command string, timeout int) (string, string, error) {
 
 	// Use circular buffer to capture output
 	const maxOutputSize = 10 * 1024 * 1024 // 10MB
-	stdoutBuf := NewCircularBuffer(maxOutputSize)
-	stderrBuf := NewCircularBuffer(maxOutputSize)
+	stdoutBuf := newCircularBuffer(maxOutputSize)
+	stderrBuf := newCircularBuffer(maxOutputSize)
 
 	// Capture output asynchronously
 	var wg sync.WaitGroup
@@ -167,8 +167,8 @@ func RunWithRetries(cmd string, numRetries int, timeout int) (int, error) {
 	return lastCode, nil
 }
 
-// CircularBuffer implements a fixed-size circular buffer, safe for concurrent use.
-type CircularBuffer struct {
+// circularBuffer implements a fixed-size circular buffer, safe for concurrent use.
+type circularBuffer struct {
 	mu     sync.RWMutex
 	buf    []byte
 	size   int
@@ -176,16 +176,16 @@ type CircularBuffer struct {
 	full   bool
 }
 
-// NewCircularBuffer creates a new circular buffer
-func NewCircularBuffer(size int) *CircularBuffer {
-	return &CircularBuffer{
+// newCircularBuffer creates a new circular buffer
+func newCircularBuffer(size int) *circularBuffer {
+	return &circularBuffer{
 		buf:  make([]byte, size),
 		size: size,
 	}
 }
 
 // Write writes data to the circular buffer, overwriting oldest data when exceeding capacity
-func (c *CircularBuffer) Write(p []byte) (n int, err error) {
+func (c *circularBuffer) Write(p []byte) (n int, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	n = len(p)
@@ -206,7 +206,7 @@ func (c *CircularBuffer) Write(p []byte) (n int, err error) {
 }
 
 // Bytes returns the latest data from the buffer
-func (c *CircularBuffer) Bytes() []byte {
+func (c *circularBuffer) Bytes() []byte {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if !c.full {

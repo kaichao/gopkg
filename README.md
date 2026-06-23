@@ -30,6 +30,12 @@ Unified command line parameter management for Go with Cobra, supporting multiple
 ### 8. `self`
 Runtime introspection utilities: goroutine/thread/process identity, stack traces, and function name resolution.
 
+### 9. `security`
+Pluggable security framework with interfaces for authentication, authorization, and billing. Supports plugin-based implementations loaded from .so files and provides gRPC unary/stream interceptors.
+
+### 10. `misc`
+Miscellaneous small utilities too lightweight to warrant their own sub-package (e.g., stdin reading).
+
 ## License
 
 MIT License

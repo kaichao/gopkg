@@ -11,13 +11,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 gopkg/
 ├── asyncbatch/     # Asynchronous batch processor with dynamic flow control
-├── misc/           # Miscellaneous small utilities (stdin, etc.)
 ├── dbcache/        # Database caching layer with SQL template support
 ├── errors/         # Enhanced error handling with tracing and context
 ├── exec/           # Cross-environment command executor (local/SSH)
 ├── logger/         # Structured logging with error tracing and rotation
+├── misc/           # Miscellaneous small utilities (stdin, etc.)
 ├── param/          # Unified command line parameter management for Cobra
 ├── pgbulk/         # PostgreSQL bulk operations (COPY, INSERT, UPDATE)
+├── security/       # Pluggable security framework (AuthN/AuthZ/Billing) with gRPC interceptors
 └── self/           # Runtime introspection utilities (goroutine/thread/process ID)
 ```
 
@@ -48,6 +49,7 @@ go test ./dbcache/...
 go test ./exec/...
 go test ./self/...
 go test ./misc/...
+go test ./security/...
 ```
 
 ### Lint
@@ -69,6 +71,7 @@ Key external dependencies:
 - `github.com/spf13/cobra` - Command line interface
 - `github.com/stretchr/testify` - Testing utilities
 - `golang.org/x/crypto` - SSH support for exec package
+- `google.golang.org/grpc` - gRPC framework for security interceptors
 
 ## Architecture Notes
 
@@ -96,6 +99,7 @@ The logger package automatically filters sensitive context fields:
 - `pgbulk` + `errors`: All bulk operations return enhanced traced errors
 - `param` + `cobra`: Simplifies command parameter handling with validation
 - `dbcache` + `go-cache`: Provides automatic database result caching
+- `security` + `grpc`: Pluggable AuthN/AuthZ/Billing via gRPC interceptors
 
 ## Testing
 
