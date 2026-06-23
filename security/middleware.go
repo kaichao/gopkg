@@ -83,6 +83,11 @@ func NewModule(cfg SecurityConfig, methodMap map[string]MethodMapping) (*Securit
 // UnaryInterceptor 返回 gRPC UnaryServerInterceptor。
 func (m *SecurityModule) UnaryInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+		// 跳过系统 RPC（健康检查、反射）
+		if skipAuth(info.FullMethod) {
+			return handler(ctx, req)
+		}
+
 		// 1. 认证
 		principal, err := m.authenticate(ctx)
 		if err != nil {
@@ -109,6 +114,11 @@ func (m *SecurityModule) UnaryInterceptor() grpc.UnaryServerInterceptor {
 // StreamInterceptor 返回 gRPC StreamServerInterceptor。
 func (m *SecurityModule) StreamInterceptor() grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		// 跳过系统 RPC
+		if skipAuth(info.FullMethod) {
+			return handler(srv, ss)
+		}
+
 		ctx := ss.Context()
 
 		// 1. 认证
@@ -193,6 +203,20 @@ func (m *SecurityModule) mapMethod(fullMethod string) (resource, action string) 
 		return strings.ToLower(parts[len(parts)-1]), "execute"
 	}
 	return "unknown", "execute"
+}
+
+// ── 系统 RPC 豁免 ────────────────────────────────────────────
+
+// skipAuth 跳过健康检查和反射等系统 RPC 的认证。
+var skipMethods = map[string]bool{
+	"/grpc.health.v1.Health/Check":                         true,
+	"/grpc.health.v1.Health/Watch":                         true,
+	"/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo": true,
+	"/grpc.reflection.v1.ServerReflection/ServerReflectionInfo":      true,
+}
+
+func skipAuth(fullMethod string) bool {
+	return skipMethods[fullMethod]
 }
 
 // ── 辅助函数 ─────────────────────────────────────────────────
