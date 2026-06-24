@@ -29,10 +29,12 @@ func PrincipalFromContext(ctx context.Context) *Principal {
 
 // ── SecurityModule ───────────────────────────────────────────
 
-// MethodMapping 定义 gRPC 方法到 (resource, action) 的映射。
+// MethodMapping 定义 gRPC 方法到 (resource, action, resourceID) 的映射。
+// ResourceID 可选，用于 app_id 等细粒度授权（空字符串表示不限定）。
 type MethodMapping struct {
-	Resource string
-	Action   string
+	Resource   string
+	Action     string
+	ResourceID string // 可选，如 "42" (app_id)
 }
 
 // SecurityModule 组装认证、授权、记账三个组件，提供 gRPC 拦截器。
@@ -96,8 +98,8 @@ func (m *SecurityModule) UnaryInterceptor() grpc.UnaryServerInterceptor {
 		ctx = context.WithValue(ctx, principalKey, principal)
 
 		// 2. 授权
-		resource, action := m.mapMethod(info.FullMethod)
-		if err := m.authz.Authorize(ctx, principal, resource, action); err != nil {
+		resource, action, resourceID := m.mapMethod(info.FullMethod)
+		if err := m.authz.Authorize(ctx, principal, resource, action, resourceID); err != nil {
 			return nil, status.Error(codes.PermissionDenied, err.Error())
 		}
 
@@ -129,8 +131,8 @@ func (m *SecurityModule) StreamInterceptor() grpc.StreamServerInterceptor {
 		ctx = context.WithValue(ctx, principalKey, principal)
 
 		// 2. 授权
-		resource, action := m.mapMethod(info.FullMethod)
-		if err := m.authz.Authorize(ctx, principal, resource, action); err != nil {
+		resource, action, resourceID := m.mapMethod(info.FullMethod)
+		if err := m.authz.Authorize(ctx, principal, resource, action, resourceID); err != nil {
 			return status.Error(codes.PermissionDenied, err.Error())
 		}
 
@@ -193,16 +195,16 @@ func (m *SecurityModule) recordUsage(principal *Principal, resource, action stri
 // ── Method → Resource 映射 ───────────────────────────────────
 
 // mapMethod 查找 fullMethod 的映射，未找到时按路径推断。
-func (m *SecurityModule) mapMethod(fullMethod string) (resource, action string) {
+func (m *SecurityModule) mapMethod(fullMethod string) (resource, action, resourceID string) {
 	if entry, ok := m.methodMap[fullMethod]; ok {
-		return entry.Resource, entry.Action
+		return entry.Resource, entry.Action, entry.ResourceID
 	}
 	// 未知方法按 RPC 路径最后一段推断 resource
 	parts := strings.Split(fullMethod, "/")
 	if len(parts) > 0 {
-		return strings.ToLower(parts[len(parts)-1]), "execute"
+		return strings.ToLower(parts[len(parts)-1]), "execute", ""
 	}
-	return "unknown", "execute"
+	return "unknown", "execute", ""
 }
 
 // ── 系统 RPC 豁免 ────────────────────────────────────────────

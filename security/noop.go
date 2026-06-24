@@ -23,7 +23,7 @@ func (a *NoopAuthenticator) Authenticate(ctx context.Context, md metadata.MD) (*
 // NoopAuthorizer 缺省授权实现：全部放行。
 type NoopAuthorizer struct{}
 
-func (a *NoopAuthorizer) Authorize(ctx context.Context, p *Principal, resource, action string) error {
+func (a *NoopAuthorizer) Authorize(ctx context.Context, p *Principal, resource, action, resourceID string) error {
 	return nil
 }
 

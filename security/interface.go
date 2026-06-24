@@ -34,7 +34,7 @@ type Authenticator interface {
 // 判断 principal 是否有权对 resource 执行 action。
 // 允许返回 nil，拒绝返回 error（controld 转换为 PermissionDenied）。
 type Authorizer interface {
-	Authorize(ctx context.Context, p *Principal, resource, action string) error
+	Authorize(ctx context.Context, p *Principal, resource, action, resourceID string) error
 }
 
 // UsageRecord 记录一次资源使用事件，用于记账。
