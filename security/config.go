@@ -175,9 +175,9 @@ func LoadConfig() SecurityConfig {
 		PluginDir: os.Getenv("SECURITY_PLUGIN_DIR"),
 
 		GRPCTLSEnabled: getEnvBool("GRPC_TLS_ENABLED", false),
-		GRPCCertFile:   os.Getenv("GRPC_TLS_CERT_FILE"),
-		GRPCKeyFile:    os.Getenv("GRPC_TLS_KEY_FILE"),
-		GRPCCAFile:     os.Getenv("GRPC_TLS_CA_FILE"),
+		GRPCCertFile:   getEnvString("GRPC_TLS_CERT_FILE", "/etc/scalebox/tls/server.crt"),
+		GRPCKeyFile:    getEnvString("GRPC_TLS_KEY_FILE", "/etc/scalebox/tls/server.key"),
+		GRPCCAFile:     getEnvString("GRPC_TLS_CA_FILE", "/usr/local/etc/ca.crt"),
 
 		PGSSLMode:  getEnvString("PG_SSLMODE", "disable"),
 		PGCertFile: os.Getenv("PG_SSL_CERT_FILE"),
@@ -188,7 +188,7 @@ func LoadConfig() SecurityConfig {
 		AuthMode:  getEnvString("AUTH_MODE", "noop"),
 		AuthToken: os.Getenv("AUTH_TOKEN"),
 
-		JWTPublicKeyFile: os.Getenv("JWT_PUBLIC_KEY_FILE"),
+		JWTPublicKeyFile: getEnvString("JWT_PUBLIC_KEY_FILE", "/usr/local/etc/jwt/public.pem"),
 		JWTAlgorithm:     getEnvString("JWT_ALGORITHM", "EdDSA"),
 		JWTIssuer:        getEnvString("JWT_ISSUER", "gopkg-security"),
 		JWTJWKSURL:       os.Getenv("JWT_JWKS_URL"),

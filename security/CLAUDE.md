@@ -31,8 +31,9 @@ type Principal struct {
 ### MethodMapping
 ```go
 type MethodMapping struct {
-    Resource string  // 资源名（如 "app", "cluster", "task"）
-    Action   string  // 操作名（如 "read", "write", "execute"）
+    Resource   string  // 资源名（如 "app", "cluster", "task"）
+    Action     string  // 操作名（如 "read", "write", "execute"）
+    ResourceID string  // 可选，资源 ID（如 "42" 表示 app-42），用于细粒度授权
 }
 ```
 
@@ -92,16 +93,20 @@ type SecurityModule struct { /* 内部持有 authenticator, authorizer, billing,
 ## 拦截器执行流程
 
 ```
-1. authenticate(ctx)
+1. skipAuth(fullMethod)
+   └─ 健康检查/反射 → 直接放行
+
+2. authenticate(ctx)
    └─ metadata.FromIncomingContext → Authenticator.Authenticate()
    └─ Principal 注入 context
 
-2. Authorizer.Authorize(ctx, principal, resource, action)
+3. mapMethod(fullMethod) → resource, action, resourceID
+   └─ Authorizer.Authorize(ctx, principal, resource, action, resourceID)
    └─ 拒绝 → gRPC PermissionDenied
 
-3. handler(ctx, req)
+4. handler(ctx, req)
 
-4. recordUsage()（异步，不阻塞响应）
+5. recordUsage()（异步，不阻塞响应）
    └─ BillingService.Record()
 ```
 
