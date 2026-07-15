@@ -2,14 +2,17 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/kaichao/gopkg/security.svg)](https://pkg.go.dev/github.com/kaichao/gopkg/security)
 
-`security` 定义可插拔安全框架的接口、注册表和 gRPC 拦截器，提供认证（AuthN）、授权（AuthZ）、记账（Billing）三个维度的安全能力。
+`security` 定义可插拔安全框架的接口、注册表、gRPC 拦截器和 HTTP 中间件，提供认证（AuthN）、授权（AuthZ）、记账（Billing）三个维度的安全能力，同时支持 gRPC 和 HTTP 两种协议。
 
 ## 特性
 
-- **接口 + 注册表 + 插件**：核心接口定义在 `interface.go`，具体实现通过 `.so` 插件动态加载
+- **双协议支持**：gRPC 走 `SecurityModule` + 拦截器，HTTP 走 `SecurityHandler` + 中间件
+- **协议无关认证**：新增 `TokenAuthenticator` 接口，接收 token 字符串，不绑定 gRPC metadata
+- **应用定义角色模型**：`PermissionStore` 接口由各应用实现，通用 RBAC 引擎不关心角色名和资源名
+- **接口 + 注册表 + 插件**：核心接口定义在 `interface.go`，具体实现通过 `.so` 插件动态加载（gRPC 路径，向后兼容）
+- **显式构造模式**：HTTP 路径推荐直接构造实例，不依赖全局注册表和插件机制
+- **双向适配器**：`AuthenticatorFromToken` / `TokenFromAuthenticator`，新旧接口无缝互转
 - **三件套缺省实现**：`NoopAuthenticator`（匿名 admin）、`NoopAuthorizer`（全部放行）、`NoopBillingService`（不记账）
-- **gRPC 原生拦截器**：`UnaryInterceptor` 和 `StreamInterceptor`，自动完成认证→授权→执行→记账流程
-- **TLS 配置统一管理**：gRPC TLS 和 PostgreSQL TLS 配置集中在 `SecurityConfig` 中
 - **环境变量驱动**：无代码配置，全部通过环境变量控制
 - **独立项目设计**：不依赖 scalebox 特有逻辑，环境变量无业务前缀
 
@@ -21,15 +24,7 @@ go get github.com/kaichao/gopkg/security
 
 ## 快速开始
 
-### 不使用安全（默认）
-
-```go
-cfg := security.LoadConfig()
-mod, err := security.NewModule(cfg, nil)
-// cfg.Enabled == false → mod == nil，跳过拦截器注册
-```
-
-### 启用安全
+### gRPC 服务（现有方式，向后兼容）
 
 ```go
 import "github.com/kaichao/gopkg/security"
@@ -40,22 +35,76 @@ security.LoadPlugins(true, "/usr/lib/myapp/plugins")
 // 2. 加载配置（从环境变量）
 cfg := security.LoadConfig()
 
-// 3. 创建安全模块
+// 3. 创建安全模块（Enabled=false 时返回 nil）
 mod, err := security.NewModule(cfg, map[string]security.MethodMapping{
-    "/myapp.UserService/GetUser":  {"user", "read"},
+    "/myapp.UserService/GetUser":   {"user", "read"},
     "/myapp.UserService/ListUsers": {"user", "list"},
 })
 
 // 4. 注册 gRPC 拦截器
-s := grpc.NewServer(
-    grpc.UnaryInterceptor(mod.UnaryInterceptor()),
-    grpc.StreamInterceptor(mod.StreamInterceptor()),
+if mod != nil {
+    s := grpc.NewServer(
+        grpc.UnaryInterceptor(mod.UnaryInterceptor()),
+        grpc.StreamInterceptor(mod.StreamInterceptor()),
+    )
+}
+```
+
+### HTTP 服务（新增，推荐新项目使用）
+
+```go
+import (
+    "github.com/kaichao/gopkg/security"
+    "github.com/kaichao/scalebox-security/jwt"
 )
+
+// 1. 构造认证器（显式构造，不依赖插件和全局注册表）
+verifier := jwt.NewVerifier(jwt.Config{
+    PublicKeyFile: "/etc/myapp/jwt/public.pem",
+    Issuer:        "myapp",
+})
+
+// 2. 创建 HTTP 安全中间件
+handler := security.NewSecurityHandler(security.SecurityHandlerConfig{
+    Auth:  verifier,
+    Authz: &security.NoopAuthorizer{},
+    RouteMap: map[string]security.MethodMapping{
+        "POST /api/tapes/import":    {Resource: "tape", Action: "create"},
+        "GET  /api/tapes/{barcode}": {Resource: "tape", Action: "read"},
+    },
+    SkipPaths: []string{"GET /login", "GET /health"},
+})
+
+// 3. 注册 HTTP 中间件
+mux.Handle("/api/", handler.Middleware(apiMux))
 ```
 
 ## 核心接口
 
-### Authenticator — 认证
+### Identity（新增）— 协议无关主体身份
+
+```go
+type Identity interface {
+    Subject() string                // 唯一标识
+    Name() string                   // 显示名
+    RoleList() []string             // 角色列表
+    Attr(key string) (string, bool) // 扩展属性
+}
+```
+
+`Principal` 结构体实现此接口，`*Principal` 可直接当 `Identity` 使用。应用也可自定义实现。
+
+### TokenAuthenticator（新增）— 协议无关认证
+
+```go
+type TokenAuthenticator interface {
+    AuthenticateToken(ctx context.Context, token string) (Identity, error)
+}
+```
+
+接收原始 token 字符串，返回 Identity。HTTP 中间件和 gRPC 拦截器均可使用。
+
+### Authenticator（保留）— gRPC 认证
 
 ```go
 type Authenticator interface {
@@ -65,11 +114,21 @@ type Authenticator interface {
 
 从 gRPC metadata 中提取凭证并验证，成功返回 `Principal`，失败返回 error。
 
+### PermissionStore（新增）— 角色权限映射
+
+```go
+type PermissionStore interface {
+    CheckPermission(ctx context.Context, roles []string, resource, action, resourceID string) (bool, error)
+}
+```
+
+由各应用实现角色→权限映射，通用 RBAC 引擎通过此接口查询。
+
 ### Authorizer — 授权
 
 ```go
 type Authorizer interface {
-    Authorize(ctx context.Context, p *Principal, resource, action string) error
+    Authorize(ctx context.Context, p *Principal, resource, action, resourceID string) error
 }
 ```
 
@@ -119,7 +178,9 @@ type Principal struct {
 
 完整配置列表见 `SecurityConfig` 结构体。
 
-## 编写插件
+## 编写安全实现
+
+### 插件方式（gRPC，向后兼容）
 
 实现 `Authenticator` 接口，编译为 `.so`，在 `init()` 中注册：
 
@@ -147,7 +208,31 @@ func (a *JWTAuthenticator) Authenticate(ctx context.Context, md metadata.MD) (*s
 go build -buildmode=plugin -o jwt.so jwt.go
 ```
 
+### 显式构造方式（HTTP，推荐新项目使用）
+
+实现 `TokenAuthenticator` 接口，作为普通库直接使用：
+
+```go
+type MyAuthenticator struct { ... }
+
+func (a *MyAuthenticator) AuthenticateToken(ctx context.Context, token string) (security.Identity, error) {
+    // 验证 token，返回 Identity（或 *Principal）
+}
+```
+
+也可用内置适配器桥接新旧接口：
+
+```go
+// 旧 Authenticator → 新 TokenAuthenticator
+ta := security.TokenFromAuthenticator(myOldAuth)
+
+// 新 TokenAuthenticator → 旧 Authenticator
+a := security.AuthenticatorFromToken(myNewAuth)
+```
+
 ## 拦截器流程
+
+### gRPC
 
 ```
 请求到达
@@ -156,12 +241,31 @@ go build -buildmode=plugin -o jwt.so jwt.go
   │     └─ 从 metadata 提取凭证 → Authenticator.Authenticate()
   │     └─ 注入 Principal 到 context
   │
-  ├─ 2. Authorizer.Authorize(ctx, principal, resource, action)
+  ├─ 2. Authorizer.Authorize(ctx, principal, resource, action, resourceID)
   │     └─ 拒绝 → PermissionDenied
   │
   ├─ 3. handler(ctx, req)
   │
   └─ 4. BillingService.Record()（异步，不影响响应）
+```
+
+### HTTP（新增）
+
+```
+请求到达
+  │
+  ├─ 1. skipPath(methodPath)
+  │     └─ 登录/健康检查 → 直接放行
+  │
+  ├─ 2. authenticate(r)
+  │     └─ Authorization header / Cookie → TokenAuthenticator.AuthenticateToken()
+  │     └─ 注入 Identity 到 context
+  │
+  ├─ 3. mapRoute(methodPath) → 精确匹配 → 模式匹配({barcode}) → 路径推断
+  │     └─ Authorizer.Authorize(ctx, principal, resource, action, resourceID)
+  │     └─ 拒绝 → HTTP 403
+  │
+  └─ 4. handler.ServeHTTP(w, r)
 ```
 
 ## 文档
