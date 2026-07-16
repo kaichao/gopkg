@@ -308,3 +308,62 @@ func tokenHash(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(h[:])
 }
+
+// ── JWT Signer ──────────────────────────────────────────────
+
+// JWTSigner 使用 Ed25519 私钥签发 JWT 令牌。
+type JWTSigner struct {
+	privateKey ed25519.PrivateKey
+	issuer     string
+}
+
+// JWTSignerConfig 是 JWT 签发器的配置。
+type JWTSignerConfig struct {
+	PrivateKeyFile string // Ed25519 私钥文件路径
+	Issuer         string // 签发者 (iss claim)
+}
+
+// NewJWTSigner 创建 JWT 签发器。
+func NewJWTSigner(cfg JWTSignerConfig) (*JWTSigner, error) {
+	keyBytes, err := os.ReadFile(cfg.PrivateKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("read jwt private key file: %w", err)
+	}
+	if len(keyBytes) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("invalid EdDSA private key size: %d, want %d", len(keyBytes), ed25519.PrivateKeySize)
+	}
+	return &JWTSigner{
+		privateKey: ed25519.PrivateKey(keyBytes),
+		issuer:     cfg.Issuer,
+	}, nil
+}
+
+// Sign 签发 JWT 令牌。
+// ttl 为有效期，0 表示永不过期。
+func (s *JWTSigner) Sign(subject, username string, roles []string, ttl time.Duration) (string, error) {
+	now := time.Now()
+	claims := JWTClaims{
+		Subject:  subject,
+		Issuer:   s.issuer,
+		Username: username,
+		Roles:    roles,
+		Iat:      now,
+	}
+	if ttl > 0 {
+		claims.Exp = now.Add(ttl)
+	}
+
+	header := `{"alg":"EdDSA","typ":"JWT"}`
+	claimBytes, _ := json.Marshal(claims)
+
+	headerB64 := b64URLEncode([]byte(header))
+	claimsB64 := b64URLEncode(claimBytes)
+	message := headerB64 + "." + claimsB64
+
+	sig := ed25519.Sign(s.privateKey, []byte(message))
+	return message + "." + b64URLEncode(sig), nil
+}
+
+func b64URLEncode(data []byte) string {
+	return base64.RawURLEncoding.EncodeToString(data)
+}

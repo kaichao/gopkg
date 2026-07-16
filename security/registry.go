@@ -93,10 +93,10 @@ func NewBillingService(mode string, cfg BillConfig) (BillingService, error) {
 }
 
 // NewTokenAuthenticator 按名称创建 TokenAuthenticator。
-// mode 为空或 "noop" 时返回 nil（调用方自行处理默认行为）。
+// mode 为空或 "noop" 返回 NoopTokenAuthenticator（匿名 admin）。
 func NewTokenAuthenticator(mode string, cfg AuthConfig) (TokenAuthenticator, error) {
 	if mode == "" || mode == "noop" {
-		return nil, nil
+		return &NoopTokenAuthenticator{}, nil
 	}
 	fn, ok := tokenAuthFactories[mode]
 	if !ok {

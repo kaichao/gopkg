@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"os"
 	"testing"
@@ -20,10 +19,6 @@ func generateTestKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 		t.Fatalf("generate key: %v", err)
 	}
 	return pub, priv
-}
-
-func b64URLEncode(data []byte) string {
-	return base64.RawURLEncoding.EncodeToString(data)
 }
 
 type testClaims struct {

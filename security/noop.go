@@ -33,3 +33,17 @@ type NoopBillingService struct{}
 func (b *NoopBillingService) Record(ctx context.Context, r *UsageRecord) error {
 	return nil
 }
+
+// NoopTokenAuthenticator 缺省 TokenAuthenticator 实现：直接放行，返回匿名 admin 身份。
+// 与 NoopAuthenticator（gRPC）行为一致。
+type NoopTokenAuthenticator struct{}
+
+func (a *NoopTokenAuthenticator) AuthenticateToken(ctx context.Context, token string) (Identity, error) {
+	return &Principal{
+		ID:              "anonymous",
+		Username:        "anonymous",
+		Roles:           []string{"admin"},
+		AllowedClusters: []string{"*"},
+		ExpiresAt:       time.Now().Add(24 * time.Hour),
+	}, nil
+}
