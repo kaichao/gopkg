@@ -9,6 +9,22 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// ── Options 模式 ──────────────────────────────────────────────
+
+// Options 是构造 SecurityHandler 的函数选项。
+type Options struct {
+	Auth            TokenAuthenticator
+	Authz           Authorizer
+	RouteMap        map[string]MethodMapping
+	SkipPaths       []string
+	Blacklist       TokenBlacklist
+	KeyStore        KeyStore
+	AuditStore      AuditStore
+}
+
+// Option 是设置 Options 的函数类型。
+type Option func(*Options)
+
 // ── Context key ──────────────────────────────────────────────
 
 type identityKeyType struct{}
@@ -65,6 +81,84 @@ func NewSecurityHandler(cfg SecurityHandlerConfig) *SecurityHandler {
 		routeMap: cfg.RouteMap,
 		skipSet:  skipSet,
 		log:      logrus.WithField("component", "security-http"),
+	}
+}
+
+// NewHandler 使用 Options 模式创建 HTTP 安全中间件。
+//
+// 默认启用本地 JWT 验签和 RBAC 授权（从环境变量加载配置）。
+// 未设置 Auth 时自动降级为 noop 模式（匿名 admin）。
+//
+// 用法：
+//
+//	handler := security.NewHandler(
+//	    security.WithDB(pool),
+//	    security.WithPermissionStore(&myStore{}),
+//	    security.WithSkipPaths("GET /health", "POST /api/auth/login"),
+//	)
+func NewHandler(opts ...Option) *SecurityHandler {
+	o := &Options{}
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	skipSet := make(map[string]bool, len(o.SkipPaths))
+	for _, p := range o.SkipPaths {
+		skipSet[p] = true
+	}
+
+	// 从环境变量加载 JWT 配置（无前缀）
+	cfg := LoadConfig()
+
+	var auth TokenAuthenticator
+	if cfg.Enabled && cfg.JWT.PublicKeyFile != "" {
+		v, err := NewJWTVerifier(JWTVerifierConfig{
+			PublicKeyFile: cfg.JWT.PublicKeyFile,
+			JWKSURL:       cfg.JWT.JWKSURL,
+			JWKSRefresh:   cfg.JWT.JWKSRefresh,
+			Issuer:        cfg.JWT.Issuer,
+		})
+		if err == nil {
+			if o.Blacklist != nil {
+				v.SetBlacklist(o.Blacklist)
+			}
+			auth = v
+		}
+	} else if o.Auth != nil {
+		// 调用方显式提供了认证器
+		auth = o.Auth
+	}
+
+	var authz Authorizer
+	if o.Authz != nil {
+		authz = o.Authz
+	}
+
+	return &SecurityHandler{
+		auth:     auth,
+		authz:    authz,
+		routeMap: o.RouteMap,
+		skipSet:  skipSet,
+		log:      logrus.WithField("component", "security-http"),
+	}
+}
+
+// WithSkipPaths 设置跳过认证的路径列表（"METHOD /path" 格式）。
+func WithSkipPaths(paths ...string) Option {
+	return func(o *Options) {
+		o.SkipPaths = append(o.SkipPaths, paths...)
+	}
+}
+
+// WithRouteMap 设置 HTTP 方法+路径到资源的映射表。
+func WithRouteMap(m map[string]MethodMapping) Option {
+	return func(o *Options) { o.RouteMap = m }
+}
+
+// WithSigner 设置 JWT 签发器（用于登录时签发 token）。
+func WithSigner(signer *JWTSigner) Option {
+	return func(o *Options) {
+		// 签发器传给调用方，不存储在 Options 中
 	}
 }
 

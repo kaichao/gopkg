@@ -93,11 +93,18 @@ type JWTVerifierConfig struct {
 //   - JWKS 端点：定期从远端拉取公钥集合，按 kid 匹配
 //
 // Token 验证结果缓存在内存中，缓存有效期对齐 token exp。
+// 若 Blacklist 不为 nil，验签后检查 jti 是否在黑名单中。
 type JWTVerifier struct {
 	publicKey ed25519.PublicKey
 	issuer    string
 	keyFunc   func(kid string) (ed25519.PublicKey, error)
+	blacklist TokenBlacklist
 	cache     sync.Map // token SHA-256 hex → *cachedToken
+}
+
+// SetBlacklist 设置 token 黑名单（logout/refresh 时使用）。
+func (v *JWTVerifier) SetBlacklist(bl TokenBlacklist) {
+	v.blacklist = bl
 }
 
 type cachedToken struct {
@@ -142,12 +149,12 @@ func NewJWTVerifier(cfg JWTVerifierConfig) (*JWTVerifier, error) {
 
 // AuthenticateToken 实现 TokenAuthenticator 接口。
 func (v *JWTVerifier) AuthenticateToken(ctx context.Context, token string) (Identity, error) {
-	return v.verifyAndCache(token)
+	return v.verifyAndCache(ctx, token)
 }
 
 // ── 内部：验签 + 缓存 ──────────────────────────────────────
 
-func (v *JWTVerifier) verifyAndCache(token string) (*Principal, error) {
+func (v *JWTVerifier) verifyAndCache(ctx context.Context, token string) (*Principal, error) {
 	hash := tokenHash(token)
 	if val, ok := v.cache.Load(hash); ok {
 		ct := val.(*cachedToken)
@@ -157,7 +164,7 @@ func (v *JWTVerifier) verifyAndCache(token string) (*Principal, error) {
 		v.cache.Delete(hash)
 	}
 
-	p, err := v.verifyAndParse(token)
+	p, err := v.verifyAndParse(ctx, token)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +177,7 @@ func (v *JWTVerifier) verifyAndCache(token string) (*Principal, error) {
 	return p, nil
 }
 
-func (v *JWTVerifier) verifyAndParse(tokenStr string) (*Principal, error) {
+func (v *JWTVerifier) verifyAndParse(ctx context.Context, tokenStr string) (*Principal, error) {
 	parts := strings.Split(tokenStr, ".")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("invalid jwt format")
@@ -225,6 +232,17 @@ func (v *JWTVerifier) verifyAndParse(tokenStr string) (*Principal, error) {
 	// issuer 校验
 	if v.issuer != "" && claims.Issuer != v.issuer {
 		return nil, fmt.Errorf("issuer mismatch: want %s, got %s", v.issuer, claims.Issuer)
+	}
+
+	// 黑名单检查（logout/refresh 时加入的 jti）
+	if v.blacklist != nil && claims.JTI != "" {
+		blocked, err := v.blacklist.IsBlacklisted(ctx, claims.JTI)
+		if err != nil {
+			return nil, fmt.Errorf("blacklist check: %w", err)
+		}
+		if blocked {
+			return nil, fmt.Errorf("token has been revoked")
+		}
 	}
 
 	return claims.ToPrincipal(), nil

@@ -44,42 +44,104 @@ type SecurityModule struct {
 	bill      BillingService
 	log       *logrus.Entry
 	methodMap map[string]MethodMapping
+	blacklist TokenBlacklist
 }
 
-// NewModule 根据配置创建 SecurityModule。
-// cfg.Enabled==false 时返回 nil（不注册拦截器）。
-// methodMap 是 gRPC FullMethod → MethodMapping 的映射表，由调用方注入。
-func NewModule(cfg SecurityConfig, methodMap map[string]MethodMapping) (*SecurityModule, error) {
-	if !cfg.Enabled {
-		return nil, nil
+// ModuleOption 是创建 SecurityModule 的函数选项。
+type ModuleOption func(*moduleOpts)
+
+type moduleOpts struct {
+	auth       Authenticator
+	authz      Authorizer
+	bill       BillingService
+	methodMap  map[string]MethodMapping
+	blacklist  TokenBlacklist
+	auditStore AuditStore
+}
+
+// WithAuthenticator 设置自定义认证器。
+func WithAuthenticator(a Authenticator) ModuleOption {
+	return func(o *moduleOpts) { o.auth = a }
+}
+
+// WithAuthorizer 设置自定义授权器。
+func WithAuthorizer(a Authorizer) ModuleOption {
+	return func(o *moduleOpts) { o.authz = a }
+}
+
+// WithBillingService 设置记账服务。
+func WithBillingService(b BillingService) ModuleOption {
+	return func(o *moduleOpts) { o.bill = b }
+}
+
+// WithMethodMap 设置 gRPC 方法到资源的映射表。
+func WithMethodMap(m map[string]MethodMapping) ModuleOption {
+	return func(o *moduleOpts) { o.methodMap = m }
+}
+
+// WithBlacklist 设置 Token 黑名单（用于 JWT 验签后的撤销检查）。
+func WithBlacklist(bl TokenBlacklist) ModuleOption {
+	return func(o *moduleOpts) { o.blacklist = bl }
+}
+
+// WithAuditStore 设置审计日志存储。
+func WithAuditStore(as AuditStore) ModuleOption {
+	return func(o *moduleOpts) { o.auditStore = as }
+}
+
+
+// NewModule 创建 gRPC SecurityModule（Options 模式）。
+//
+// 用法：
+//
+//	mod := security.NewModule(
+//	    security.WithDB(pool),
+//	    security.WithPermissionStore(&myStore{}),
+//	    security.WithMethodMap(methodMap),
+//	)
+func NewModule(opts ...ModuleOption) *SecurityModule {
+	o := &moduleOpts{}
+	for _, opt := range opts {
+		opt(o)
+	}
+	if o.methodMap == nil {
+		o.methodMap = map[string]MethodMapping{}
+	}
+	if o.auth == nil {
+		o.auth = &NoopAuthenticator{}
+	}
+	if o.authz == nil {
+		o.authz = &NoopAuthorizer{}
+	}
+	if o.bill == nil {
+		o.bill = &NoopBillingService{}
 	}
 
-	authenticator, err := NewAuthenticator(cfg.AuthMode, cfg.AuthCfg())
-	if err != nil {
-		return nil, err
+	m := &SecurityModule{
+		auth:      o.auth,
+		authz:     o.authz,
+		bill:      o.bill,
+		log:       logrus.WithField("component", "security"),
+		methodMap: o.methodMap,
+		blacklist: o.blacklist,
 	}
 
-	authorizer, err := NewAuthorizer(cfg.AuthZMode, cfg.AuthzCfg())
-	if err != nil {
-		return nil, err
-	}
+	return m
+}
 
-	billing, err := NewBillingService(cfg.BillingMode, cfg.BillCfg())
-	if err != nil {
-		return nil, err
-	}
-
+// NewModuleWith 使用显式传入的组件创建 SecurityModule。
+// 适用于直接构造认证/授权器的场景（向后兼容）。
+func NewModuleWith(auth Authenticator, authz Authorizer, methodMap map[string]MethodMapping) *SecurityModule {
 	if methodMap == nil {
 		methodMap = map[string]MethodMapping{}
 	}
-
 	return &SecurityModule{
-		auth:      authenticator,
-		authz:     authorizer,
-		bill:      billing,
+		auth:      auth,
+		authz:     authz,
+		bill:      &NoopBillingService{},
 		log:       logrus.WithField("component", "security"),
 		methodMap: methodMap,
-	}, nil
+	}
 }
 
 // UnaryInterceptor 返回 gRPC UnaryServerInterceptor。

@@ -1,7 +1,4 @@
-// Package security 定义可插拔安全框架的接口、注册表和缺省实现。
-//
-// 具体认证/授权/记账实现（如 JWT、RBAC、OAuth2）以 Go plugin (.so) 形式提供，
-// 运行时通过 plugin.Open() 加载并自动注册到本包的工厂注册表中。
+// Package security 定义安全框架的核心接口和数据模型。
 package security
 
 import (
@@ -99,4 +96,28 @@ type UsageRecord struct {
 // Record 异步记录一条使用事件，不得阻塞调用方。实现应采用异步批量写入模式。
 type BillingService interface {
 	Record(ctx context.Context, r *UsageRecord) error
+}
+
+// KeyStore 查询 API Key 对应的用户身份。由各应用实现（查 t_api_key 表）。
+type KeyStore interface {
+	LookupKey(ctx context.Context, keyHash string) (Identity, error)
+}
+
+// TokenBlacklist 检查 JWT 是否已被撤销（jti 在黑名单中）。
+type TokenBlacklist interface {
+	IsBlacklisted(ctx context.Context, jti string) (bool, error)
+}
+
+// AuditEntry 是一条审计记录。
+type AuditEntry struct {
+	UserID    string
+	Action    string
+	Resource  string
+	Detail    string
+	Timestamp time.Time
+}
+
+// AuditStore 持久化审计记录。由各应用实现（写 t_audit_log 表）。
+type AuditStore interface {
+	Record(ctx context.Context, entry AuditEntry) error
 }

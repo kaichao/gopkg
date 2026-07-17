@@ -1,83 +1,57 @@
-// Package security 定义可插拔安全框架的接口、注册表和缺省实现。
-//
-// 概述：
-// security 包提供认证（Authentication）、授权（Authorization）、记账（Billing）
-// 三个核心安全接口，同时支持 gRPC 和 HTTP 两种协议。
-// 具体实现（如 JWT、OAuth2、RBAC）可以 Go plugin (.so) 形式通过 LoadPlugins()
-// 动态加载注册，也可以作为普通库显式构造使用。
+// Package security 提供协议无关的安全框架，支持 gRPC 和 HTTP。
 //
 // 架构：
-//
-//	                  ┌────────────────────┐
-//	                  │    SecurityConfig   │
-//	                  │  (环境变量加载)      │
-//	                  └────────┬───────────┘
-//	                           │
-//	              ┌────────────┼────────────┬──────────────┐
-//	              ▼            ▼            ▼              ▼
-//	        AuthConfig   AuthzConfig   BillConfig   TokenAuthConfig
-//	              │            │            │              │
-//	              ▼            ▼            ▼              ▼
-//	       NewAuthenticator  NewAuthorizer NewBillingService NewTokenAuthenticator
-//	              │            │            │              │
-//	              └────────────┼────────────┘              │
-//	                           ▼                           ▼
-//	                     SecurityModule              SecurityHandler
-//	                    (gRPC 拦截器)              (HTTP 中间件)
-//
-// 插件加载流程（gRPC 路径，保留）：
-//
-//	LoadPlugins(enabled, dir)
-//	  → 遍历 dir/*.so
-//	  → plugin.Open() 触发 init()
-//	  → 插件调用 RegisterAuthenticator / RegisterAuthorizer / RegisterBillingService
-//	  → 工厂函数注册到全局注册表
-//	  → NewModule() 按 mode 名称查找工厂并创建实例
-//
-// 显式构造（HTTP 路径，推荐）：
-//
-//	// 直接构造认证器，不依赖全局注册表和插件机制
-//	verifier := jwt.NewVerifier(jwt.Config{...})
-//	handler := security.NewSecurityHandler(security.SecurityHandlerConfig{
-//	    Auth:     verifier,
-//	    Authz:    &security.NoopAuthorizer{},
-//	    RouteMap: map[string]security.MethodMapping{
-//	        "GET /api/tapes":         {Resource: "tape", Action: "read"},
-//	        "POST /api/tapes/import": {Resource: "tape", Action: "create"},
-//	    },
-//	    SkipPaths: []string{"GET /login", "GET /health"},
-//	})
-//	mux.Handle("/api/", handler.Middleware(apiMux))
+// gopkg/security 包含全套密码学引擎（JWT、APIKey）、中间件（gRPC 拦截器、HTTP 中间件）、
+// 接口定义（PermissionStore 等）和默认 PostgreSQL 实现。
+// 应用通过 NewHandler() / NewModule() Options 模式一行接入，仅需定义 PermissionStore。
 //
 // 核心接口：
+//   - Identity：认证后的主体身份，Principal 实现
+//   - TokenAuthenticator：协议无关认证（token → Identity）
+//   - Authenticator：gRPC 认证（metadata → Principal）
+//   - Authorizer：访问控制
+//   - PermissionStore：角色→权限映射，由各应用实现
+//   - TokenBlacklist：Token 撤销检查
+//   - KeyStore：API Key 查询
+//   - AuditStore：审计日志持久化
+//   - BillingService：记账
 //
-//   - Identity：认证后的主体身份接口，Principal 结构体实现此接口
-//   - TokenAuthenticator：协议无关的认证接口（替代绑定 metadata.MD 的 Authenticator）
-//   - Authenticator：原有 gRPC 认证接口，保留向后兼容
-//   - Authorizer：访问控制接口（原有，不变）
-//   - PermissionStore：角色→权限映射规则接口，由各应用实现，供通用 RBAC 引擎调用
-//   - BillingService：记账接口（原有，不变）
+// 内置引擎（全开源）：
+//   - JWTVerifier + JWTSigner：Ed25519 JWT 验签+签发
+//   - APIKeyVerifier：SHA-256 API Key 验证
+//   - StoreAuthorizer：PermissionStore → Authorizer 包装
+//   - AuditRecorder：HTTP 审计中间件
+//   - FilePermissionStore：YAML 驱动权限（零代码方案）
 //
-// 适配器：
+// 默认 PG 实现（通过 WithDB 一行注入）：
+//   - pgTokenBlacklist：查 t_token_blacklist
+//   - pgKeyStore：查 t_api_key + t_user + t_role_binding
+//   - pgAuditStore：写 t_audit_log
 //
-//   - AuthenticatorFromToken：将 TokenAuthenticator 包装为 Authenticator（metadata → token → 认证）
-//   - TokenFromAuthenticator：将 Authenticator 包装为 TokenAuthenticator（token → metadata → 认证）
+// Options 模式（推荐）：
 //
-// 环境变量：
-// 本包设计为独立项目，环境变量不使用项目特有前缀：
+//	// HTTP 路径
+//	handler := security.NewHandler(
+//	    security.WithDB(pool),
+//	    security.WithPermissionStore(&myStore{}),
+//	    security.WithSkipPaths("GET /health", "POST /api/auth/login"),
+//	)
 //
-//	SECURITY_ENABLED        — 总开关（false 时 NewModule 返回 nil）
-//	SECURITY_PLUGIN_DIR     — .so 插件目录
-//	GRPC_TLS_ENABLED        — gRPC TLS 开关
-//	AUTH_MODE               — 认证模式（noop / jwt / oauth2 / external）
-//	AUTHZ_MODE              — 授权模式（noop / rbac / external）
-//	BILLING_MODE            — 记账模式（noop / pg / kafka / external）
-//	PG_SSLMODE              — PostgreSQL TLS 模式
+//	// gRPC 路径
+//	mod := security.NewModule(
+//	    security.WithDBModule(pool),
+//	    security.WithPermissionStoreModule(&myStore{}),
+//	    security.WithMethodMap(methodMap),
+//	)
 //
-// 自定义实现：
-// 实现 TokenAuthenticator / Authorizer / PermissionStore 接口，
-// 通过 SecurityHandlerConfig 显式传入。也可实现 Authenticator / Authorizer /
-// BillingService 接口，编译为 .so 插件，在 init() 中调用 Register* 函数注册（向后兼容）。
+// 环境变量（无前缀）：
 //
-// 未启用安全时，NewModule 返回 nil —— 调用方应据此跳过拦截器注册。
+//	SECURITY_ENABLED         — 总开关（false 时 noop 模式）
+//	JWT_PUBLIC_KEY_FILE      — Ed25519 验签公钥
+//	JWT_ISSUER               — 期望签发者
+//	JWT_PRIVATE_KEY_FILE     — 可选：本地签发私钥
+//	TOKEN_SERVICE_URL        — 可选：远程 Token Service 地址
+//	SERVICE_KEY              — 调用 Token Service 的凭证
+//
+// 未启用安全时，NewHandler 注入匿名 admin（noop 模式），所有请求直接放行。
 package security

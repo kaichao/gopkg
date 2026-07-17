@@ -1,233 +1,75 @@
 package security
 
 import (
-	"net/url"
 	"os"
 	"strconv"
 	"time"
 )
 
-// AuthConfig 是创建 Authenticator 所需的配置子集。
-type AuthConfig struct {
-	Mode  string // noop | jwt | oauth2 | external
-	Token string // 客户端注入的 JWT token
+// ── JWT 配置 ──────────────────────────────────────────────────
 
-	// JWT
-	JWTPublicKeyFile string
-	JWTAlgorithm     string
-	JWTIssuer        string
-	JWTJWKSURL       string
-	JWTJWKSRefresh   time.Duration
-
-	// OAuth2
-	OAuth2IntrospectionURL string
-	OAuth2ClientID         string
-	OAuth2ClientSecret     string
-
-	// External
-	ExternalAuthURL     string
-	ExternalAuthTimeout time.Duration
+// JWTConfig 是 JWT 验签器的配置。
+type JWTConfig struct {
+	PublicKeyFile  string        // Ed25519 验签公钥路径
+	Issuer         string        // 期望签发者（空=不校验）
+	JWKSURL        string        // JWKS 端点（替代公钥文件）
+	JWKSRefresh    time.Duration // JWKS 刷新间隔（默认 1h）
+	PrivateKeyFile string        // 可选：本地签发私钥路径
 }
 
-// AuthzConfig 是创建 Authorizer 所需的配置子集。
-type AuthzConfig struct {
-	Mode string // noop | rbac | external
+// ── Token Service 配置 ────────────────────────────────────────
 
-	// External
-	ExternalAuthZURL     string
-	ExternalAuthZTimeout time.Duration
+// TokenServiceConfig 是远程 Token Service 的客户端配置。
+type TokenServiceConfig struct {
+	URL     string        // Token Service 地址
+	Key     string        // SERVICE_KEY（调用凭证）
+	Timeout time.Duration // 请求超时（默认 5s）
 }
 
-// BillConfig 是创建 BillingService 所需的配置子集。
-type BillConfig struct {
-	Mode        string // noop | pg | kafka | external
-	BatchSize   int
-	FlushInterval time.Duration
-	KafkaBrokers     string
-	KafkaTopic       string
-}
+// ── 安全总配置 ────────────────────────────────────────────────
 
-// SecurityConfig 包含所有安全相关配置。
+// SecurityConfig 是应用安全配置。
+// 所有环境变量无应用前缀，多个应用可共用同一套配置。
 type SecurityConfig struct {
-	Enabled   bool
-	PluginDir string
-
-	// TLS
-	GRPCTLSEnabled bool
-	GRPCCertFile   string
-	GRPCKeyFile    string
-	GRPCCAFile     string
-
-	// PostgreSQL
-	PGSSLMode string
-	PGCertFile string
-	PGKeyFile  string
-	PGCAFile   string
-	PGPassword string
-
-	// Auth
-	AuthMode  string // noop | jwt | oauth2 | external
-	AuthToken string // 客户端注入的 token
-
-	// JWT
-	JWTPublicKeyFile string
-	JWTAlgorithm     string
-	JWTIssuer        string
-	JWTJWKSURL       string
-	JWTJWKSRefresh   time.Duration
-
-	// OAuth2
-	OAuth2IntrospectionURL string
-	OAuth2ClientID         string
-	OAuth2ClientSecret     string
-
-	// External Auth
-	ExternalAuthURL     string
-	ExternalAuthTimeout time.Duration
-
-	// AuthZ
-	AuthZMode string // noop | rbac | external
-
-	// External AuthZ
-	ExternalAuthZURL     string
-	ExternalAuthZTimeout time.Duration
-
-	// Billing
-	BillingMode        string // noop | pg | kafka | external
-	BillingBatchSize   int
-	BillingFlushInterval time.Duration
-	KafkaBrokers       string
-	KafkaTopic         string
+	Enabled      bool
+	JWT          JWTConfig
+	TokenService TokenServiceConfig
 }
 
-// AuthCfg 从 SecurityConfig 提取 AuthConfig。
-func (c *SecurityConfig) AuthCfg() AuthConfig {
-	return AuthConfig{
-		Mode:                   c.AuthMode,
-		Token:                  c.AuthToken,
-		JWTPublicKeyFile:       c.JWTPublicKeyFile,
-		JWTAlgorithm:           c.JWTAlgorithm,
-		JWTIssuer:              c.JWTIssuer,
-		JWTJWKSURL:             c.JWTJWKSURL,
-		JWTJWKSRefresh:         c.JWTJWKSRefresh,
-		OAuth2IntrospectionURL: c.OAuth2IntrospectionURL,
-		OAuth2ClientID:         c.OAuth2ClientID,
-		OAuth2ClientSecret:     c.OAuth2ClientSecret,
-		ExternalAuthURL:        c.ExternalAuthURL,
-		ExternalAuthTimeout:    c.ExternalAuthTimeout,
-	}
-}
-
-// AuthzCfg 从 SecurityConfig 提取 AuthzConfig。
-func (c *SecurityConfig) AuthzCfg() AuthzConfig {
-	return AuthzConfig{
-		Mode:                 c.AuthZMode,
-		ExternalAuthZURL:     c.ExternalAuthZURL,
-		ExternalAuthZTimeout: c.ExternalAuthZTimeout,
-	}
-}
-
-// BillCfg 从 SecurityConfig 提取 BillConfig。
-func (c *SecurityConfig) BillCfg() BillConfig {
-	return BillConfig{
-		Mode:          c.BillingMode,
-		BatchSize:     c.BillingBatchSize,
-		FlushInterval: c.BillingFlushInterval,
-		KafkaBrokers:  c.KafkaBrokers,
-		KafkaTopic:    c.KafkaTopic,
-	}
-}
-
-// BuildPGConnectionString 根据安全配置为 PostgreSQL 连接串追加 TLS 参数。
-// base 为原始连接串（如 postgres://user:pass@host:5432/dbname）。
-// 安全未启用或 sslmode=disable 时原样返回。
-func (c *SecurityConfig) BuildPGConnectionString(base string) string {
-	if !c.Enabled || c.PGSSLMode == "" || c.PGSSLMode == "disable" {
-		return base
-	}
-
-	u, err := url.Parse(base)
-	if err != nil {
-		return base
-	}
-	q := u.Query()
-	q.Set("sslmode", c.PGSSLMode)
-	if c.PGCertFile != "" {
-		q.Set("sslcert", c.PGCertFile)
-	}
-	if c.PGKeyFile != "" {
-		q.Set("sslkey", c.PGKeyFile)
-	}
-	if c.PGCAFile != "" {
-		q.Set("sslrootcert", c.PGCAFile)
-	}
-	if c.PGPassword != "" {
-		q.Set("password", c.PGPassword)
-	}
-	u.RawQuery = q.Encode()
-	return u.String()
-}
-
-// LoadConfig 从环境变量加载安全配置。
+// LoadConfig 从环境变量加载安全配置（无前缀）。
+//
+//	SECURITY_ENABLED            — 安全总开关（默认 false）
+//	JWT_PUBLIC_KEY_FILE         — 验签公钥文件路径
+//	JWT_JWKS_URL                — JWKS 端点
+//	JWT_JWKS_REFRESH            — JWKS 刷新间隔（默认 3600s）
+//	JWT_ISSUER                  — 期望签发者
+//	JWT_PRIVATE_KEY_FILE        — 签发私钥文件路径（可选，本地签发用）
+//	TOKEN_SERVICE_URL           — Token Service 地址（可选，远程签发用）
+//	SERVICE_KEY                 — 调用 Token Service 的凭证
+//	TOKEN_SERVICE_TIMEOUT       — Token Service 超时（默认 5s）
 func LoadConfig() SecurityConfig {
 	return SecurityConfig{
-		Enabled:   getEnvBool("SECURITY_ENABLED", false),
-		PluginDir: os.Getenv("SECURITY_PLUGIN_DIR"),
-
-		GRPCTLSEnabled: getEnvBool("GRPC_TLS_ENABLED", false),
-		GRPCCertFile:   getEnvString("GRPC_TLS_CERT_FILE", "/etc/scalebox/tls/server.crt"),
-		GRPCKeyFile:    getEnvString("GRPC_TLS_KEY_FILE", "/etc/scalebox/tls/server.key"),
-		GRPCCAFile:     getEnvString("GRPC_TLS_CA_FILE", "/usr/local/etc/ca.crt"),
-
-		PGSSLMode:  getEnvString("PG_SSLMODE", "disable"),
-		PGCertFile: os.Getenv("PG_SSL_CERT_FILE"),
-		PGKeyFile:  os.Getenv("PG_SSL_KEY_FILE"),
-		PGCAFile:   os.Getenv("PG_SSL_CA_FILE"),
-		PGPassword: os.Getenv("PG_PASSWORD"),
-
-		AuthMode:  getEnvString("AUTH_MODE", "noop"),
-		AuthToken: os.Getenv("AUTH_TOKEN"),
-
-		JWTPublicKeyFile: getEnvString("JWT_PUBLIC_KEY_FILE", "/usr/local/etc/jwt/public.pem"),
-		JWTAlgorithm:     getEnvString("JWT_ALGORITHM", "EdDSA"),
-		JWTIssuer:        getEnvString("JWT_ISSUER", "gopkg-security"),
-		JWTJWKSURL:       os.Getenv("JWT_JWKS_URL"),
-		JWTJWKSRefresh:   getEnvDuration("JWT_JWKS_REFRESH_INTERVAL", 3600*time.Second),
-
-		OAuth2IntrospectionURL: os.Getenv("OAUTH2_INTROSPECTION_URL"),
-		OAuth2ClientID:         os.Getenv("OAUTH2_CLIENT_ID"),
-		OAuth2ClientSecret:     os.Getenv("OAUTH2_CLIENT_SECRET"),
-
-		ExternalAuthURL:     os.Getenv("EXTERNAL_AUTH_URL"),
-		ExternalAuthTimeout: getEnvDuration("EXTERNAL_AUTH_TIMEOUT", 5*time.Second),
-
-		AuthZMode: getEnvString("AUTHZ_MODE", "noop"),
-
-		ExternalAuthZURL:     os.Getenv("EXTERNAL_AUTHZ_URL"),
-		ExternalAuthZTimeout: getEnvDuration("EXTERNAL_AUTHZ_TIMEOUT", 3*time.Second),
-
-		BillingMode:          getEnvString("BILLING_MODE", "noop"),
-		BillingBatchSize:     getEnvInt("BILLING_BATCH_SIZE", 100),
-		BillingFlushInterval: getEnvDuration("BILLING_FLUSH_INTERVAL", 5*time.Second),
-		KafkaBrokers:         os.Getenv("KAFKA_BROKERS"),
-		KafkaTopic:           getEnvString("KAFKA_TOPIC", "security.usage"),
+		Enabled: getEnvBool("SECURITY_ENABLED", false),
+		JWT: JWTConfig{
+			PublicKeyFile:  getEnvString("JWT_PUBLIC_KEY_FILE", ""),
+			Issuer:         getEnvString("JWT_ISSUER", ""),
+			JWKSURL:        getEnvString("JWT_JWKS_URL", ""),
+			JWKSRefresh:    getEnvDuration("JWT_JWKS_REFRESH", 3600*time.Second),
+			PrivateKeyFile: getEnvString("JWT_PRIVATE_KEY_FILE", ""),
+		},
+		TokenService: TokenServiceConfig{
+			URL:     getEnvString("TOKEN_SERVICE_URL", ""),
+			Key:     getEnvString("SERVICE_KEY", ""),
+			Timeout: getEnvDuration("TOKEN_SERVICE_TIMEOUT", 5*time.Second),
+		},
 	}
 }
 
-// ── 环境变量辅助函数 ──────────────────────────────────────────
+// ── 环境变量辅助 ──────────────────────────────────────────────
 
 func getEnvString(key, defaultValue string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
-	}
-	return defaultValue
-}
-
-func getEnvInt(key string, defaultValue int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
 	}
 	return defaultValue
 }
