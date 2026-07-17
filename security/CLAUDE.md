@@ -9,7 +9,7 @@
 | `doc.go` | Package 级别文档，架构说明 |
 | `interface.go` | 核心接口：Identity、TokenAuthenticator、Authenticator、Authorizer、PermissionStore、KeyStore、TokenBlacklist、AuditStore、BillingService |
 | `config.go` | SecurityConfig + JWTConfig + TokenServiceConfig + LoadConfig()（环境变量无前缀） |
-| `jwt.go` | JWTVerifier（Ed25519 验签+缓存+黑名单）、JWTSigner（签发）、JWTClaims、JWKS 拉取 |
+| `jwt.go` | JWTVerifier（Ed25519 验签+缓存+黑名单）、JWTSigner（签发）、JWTClaims（UnmarshalJSON/MarshalJSON 双向 Unix↔Time 转换+ToPrincipal）、JWKS 拉取 |
 | `apikey.go` | APIKeyVerifier（SHA-256 验 Key）+ GenerateAPIKey |
 | `authz.go` | StoreAuthorizer（PermissionStore → Authorizer 包装） |
 | `audit.go` | AuditRecorder（HTTP 中间件，异步写审计日志） |

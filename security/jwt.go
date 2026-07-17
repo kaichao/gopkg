@@ -60,6 +60,41 @@ func (c *JWTClaims) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalJSON 将时间戳序列化为 Unix 数字（JWT 规范要求）。
+func (c JWTClaims) MarshalJSON() ([]byte, error) {
+	type raw struct {
+		Sub            string            `json:"sub"`
+		Iss            string            `json:"iss"`
+		Exp            int64             `json:"exp,omitempty"`
+		Iat            int64             `json:"iat,omitempty"`
+		Nbf            int64             `json:"nbf,omitempty"`
+		JTI            string            `json:"jti,omitempty"`
+		Username       string            `json:"username,omitempty"`
+		Roles          []string          `json:"roles,omitempty"`
+		AllowedClusters []string          `json:"allowed_clusters,omitempty"`
+		Attrs          map[string]string `json:"attrs,omitempty"`
+	}
+	r := raw{
+		Sub:             c.Subject,
+		Iss:             c.Issuer,
+		JTI:             c.JTI,
+		Username:        c.Username,
+		Roles:           c.Roles,
+		AllowedClusters: c.AllowedClusters,
+		Attrs:           c.Attrs,
+	}
+	if !c.Exp.IsZero() {
+		r.Exp = c.Exp.Unix()
+	}
+	if !c.Iat.IsZero() {
+		r.Iat = c.Iat.Unix()
+	}
+	if !c.Nbf.IsZero() {
+		r.Nbf = c.Nbf.Unix()
+	}
+	return json.Marshal(r)
+}
+
 // ToPrincipal 将 claims 转换为 Principal（实现 Identity 接口）。
 func (c *JWTClaims) ToPrincipal() *Principal {
 	allowed := c.AllowedClusters
