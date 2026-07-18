@@ -2,6 +2,7 @@ package security
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -114,6 +115,16 @@ func WithPermissionStoreModule(store PermissionStore) ModuleOption {
 }
 
 // ── 辅助 ─────────────────────────────────────────────────────
+
+// RevokeToken 将 token 加入黑名单。
+// jti 和 exp 可从 ParseClaims(tokenString) 获取。
+func RevokeToken(ctx context.Context, pool *pgxpool.Pool, jti, userID string, expiresAt time.Time) error {
+	_, err := pool.Exec(ctx,
+		`INSERT INTO t_token_blacklist (jti, user_id, expires_at) VALUES ($1, $2, $3)`,
+		jti, userID, expiresAt,
+	)
+	return err
+}
 
 // loadRoles 从 t_role_binding 加载用户角色列表。
 func loadRoles(ctx context.Context, pool *pgxpool.Pool, userID string) []string {

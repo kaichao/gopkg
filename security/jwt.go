@@ -7,6 +7,7 @@ package security
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -395,7 +396,12 @@ func NewJWTSigner(cfg JWTSignerConfig) (*JWTSigner, error) {
 // ttl 为有效期，0 表示永不过期。
 func (s *JWTSigner) Sign(subject, username string, roles []string, ttl time.Duration) (string, error) {
 	now := time.Now()
+	jtiBytes := make([]byte, 16)
+	if _, err := rand.Read(jtiBytes); err != nil {
+		return "", fmt.Errorf("generate jti: %w", err)
+	}
 	claims := JWTClaims{
+		JTI:      hex.EncodeToString(jtiBytes),
 		Subject:  subject,
 		Issuer:   s.issuer,
 		Username: username,
@@ -419,4 +425,22 @@ func (s *JWTSigner) Sign(subject, username string, roles []string, ttl time.Dura
 
 func b64URLEncode(data []byte) string {
 	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+// ParseClaims 从 JWT 字符串解析 claims（不验签）。
+// 仅供 logout/revoke 等场景从 token 中提取 jti 和 exp 使用。
+func ParseClaims(tokenString string) (*JWTClaims, error) {
+	parts := strings.SplitN(tokenString, ".", 3)
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid jwt format")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("decode jwt payload: %w", err)
+	}
+	var claims JWTClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("parse jwt claims: %w", err)
+	}
+	return &claims, nil
 }
