@@ -145,6 +145,7 @@ func (v *JWTVerifier) SetBlacklist(bl TokenBlacklist) {
 
 type cachedToken struct {
 	p         *Principal
+	jti       string
 	expiresAt time.Time
 }
 
@@ -195,6 +196,13 @@ func (v *JWTVerifier) verifyAndCache(ctx context.Context, token string) (*Princi
 	if val, ok := v.cache.Load(hash); ok {
 		ct := val.(*cachedToken)
 		if time.Now().Before(ct.expiresAt) {
+			// 缓存命中仍检查黑名单（logout/revoke 后立即生效）
+			if v.blacklist != nil && ct.jti != "" {
+				if blacklisted, _ := v.blacklist.IsBlacklisted(ctx, ct.jti); blacklisted {
+					v.cache.Delete(hash)
+					return nil, fmt.Errorf("token revoked")
+				}
+			}
 			return ct.p, nil
 		}
 		v.cache.Delete(hash)
@@ -205,12 +213,24 @@ func (v *JWTVerifier) verifyAndCache(ctx context.Context, token string) (*Princi
 		return nil, err
 	}
 
+	// 从 claims 中提取 jti 用于黑名单检查
+	jti, _ := v.parseJTI(token)
+
 	ttl := time.Until(p.ExpiresAt)
 	if ttl > 0 {
-		v.cache.Store(hash, &cachedToken{p: p, expiresAt: p.ExpiresAt})
+		v.cache.Store(hash, &cachedToken{p: p, jti: jti, expiresAt: p.ExpiresAt})
 	}
 
 	return p, nil
+}
+
+// parseJTI 从 token payload 中提取 jti（不验签，仅 base64 解码）。
+func (v *JWTVerifier) parseJTI(token string) (string, error) {
+	claims, err := ParseClaims(token)
+	if err != nil {
+		return "", err
+	}
+	return claims.JTI, nil
 }
 
 func (v *JWTVerifier) verifyAndParse(ctx context.Context, tokenStr string) (*Principal, error) {
