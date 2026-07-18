@@ -241,14 +241,43 @@ func (h *SecurityHandler) mapRoute(methodPath string) (resource, action, resourc
 		}
 	}
 
-	// 未找到映射：按路径最后一段推断 resource
+	// 未找到映射：自动推断 resource 和 action
 	if path != "" {
-		parts := strings.Split(strings.Trim(path, "/"), "/")
-		if len(parts) > 0 {
-			return strings.ToLower(parts[0]), "execute", ""
-		}
+		resource = inferResource(path)
+		action = inferAction(method)
+		return resource, action, ""
 	}
 	return "unknown", "execute", ""
+}
+
+// inferResource 从路径推断资源名（跳过 api/ 等通用前缀）。
+func inferResource(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	// 跳过通用前缀
+	idx := 0
+	if idx < len(parts) && (parts[idx] == "api") {
+		idx++
+	}
+	if idx < len(parts) {
+		return strings.ToLower(parts[idx])
+	}
+	return "unknown"
+}
+
+// inferAction 从 HTTP 方法推断操作类型。
+func inferAction(method string) string {
+	switch method {
+	case "GET":
+		return "read"
+	case "PUT", "PATCH":
+		return "update"
+	case "POST":
+		return "create"
+	case "DELETE":
+		return "delete"
+	default:
+		return "execute"
+	}
 }
 
 // ── Token 提取 ────────────────────────────────────────────────
