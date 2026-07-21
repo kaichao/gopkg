@@ -2,6 +2,7 @@ package security
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 )
@@ -47,14 +48,15 @@ func (recorder *AuditRecorder) Middleware(next http.Handler) http.Handler {
 			UserID:    userID,
 			Action:    req.Method,
 			Resource:  req.URL.Path,
-			Detail:    detail,
+			Detail:    json.RawMessage(`"` + detail + `"`),
 			Timestamp: start,
 		})
 	})
 }
 
 // Record 手动记录一条审计日志（供业务代码调用）。
-func Record(ctx context.Context, store AuditStore, userID, action, resource, detail string) {
+// detail 为裸字符串时会自动转为 JSONB 字符串值；传 json.RawMessage 可直接写入 JSON 对象。
+func Record(ctx context.Context, store AuditStore, userID, action, resource string, detail json.RawMessage) {
 	if store == nil {
 		return
 	}

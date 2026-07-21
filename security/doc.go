@@ -23,10 +23,17 @@
 //   - AuditRecorder：HTTP 审计中间件
 //   - FilePermissionStore：YAML 驱动权限（零代码方案）
 //
-// 默认 PG 实现（通过 WithDB 一行注入）：
+// 默认 PG 实现（读侧，通过 WithDB 一行注入）：
 //   - pgTokenBlacklist：查 t_token_blacklist
 //   - pgKeyStore：查 t_api_key + t_user + t_role_binding
 //   - pgAuditStore：写 t_audit_log
+//
+// 管理侧 PG 实现（通过构造函数独立创建）：
+//   - pgUserStore：t_user CRUD（NewPGUserStore）
+//   - pgRoleStore：t_role_binding CRUD + scope JSONB（NewPGRoleStore）
+//   - pgAPIKeyManager：t_api_key CRUD + scope 限定（NewPGAPIKeyManager）
+//
+// 统一 schema 见 schema.sql。
 //
 // Options 模式（推荐）：
 //

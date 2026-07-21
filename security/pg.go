@@ -71,7 +71,7 @@ var _ AuditStore = (*pgAuditStore)(nil)
 func (s *pgAuditStore) Record(ctx context.Context, entry AuditEntry) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO t_audit_log (user_id, action, resource, detail, created_at)
-		 VALUES ($1, $2, $3, $4, $5)`,
+		 VALUES ($1, $2, $3, $4::jsonb, $5)`,
 		entry.UserID, entry.Action, entry.Resource, entry.Detail, entry.Timestamp,
 	)
 	return err

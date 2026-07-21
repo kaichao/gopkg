@@ -3,6 +3,7 @@ package security
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -113,7 +114,7 @@ type AuditEntry struct {
 	UserID    string
 	Action    string
 	Resource  string
-	Detail    string
+	Detail    json.RawMessage // t_audit_log.detail 为 JSONB 类型
 	Timestamp time.Time
 }
 
